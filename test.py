@@ -1,7 +1,2 @@
-import torch
-import math
-from tokenizers import Tokenizer
-from tokenizers.models import BPE
-
-
-
+from chinese2english import *
+from d2l import torch as d2l
