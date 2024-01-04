@@ -40,45 +40,69 @@ class Transformer(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self, voca_size, dm, num_hidden, num_head, dropout, num_layer, *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
-        self.embedding = nn.Embedding()
-        self.pos_encoding = PositionalEncoding()
+        self.dm = dm
+        self.embedding = nn.Embedding(voca_size, dm)
+        self.pos_encoding = PositionalEncoding(dm, dropout)
         self.blks = nn.Sequential()
-        for i in range(3):
-            self.blks.add_module(str(i), EncodeLayer())
+        for i in range(num_layer):
+            self.blks.add_module(str(i), EncodeLayer(dm, num_hidden, num_head, dropout))
 
-    def forward(self):
-        self.embedding()
-        self.pos_encoding()
+    def forward(self, X, valid_lens):
+        print(self.__class__.__name__)
+        X = self.embedding(X) * math.sqrt(self.dm)
+        X = self.pos_encoding(X)
+        self.attention_weight = [None] * len(self.blks)
         for i, blk in enumerate(self.blks):
-            blk()
-        pass
+            X = blk(X, valid_lens)
+            self.attention_weight[i] = blk.attention.attention.weights
+        return X
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self, voca_size, dm, num_hidden, num_head, dropout, num_layer, *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
-        self.embedding = nn.Embedding()
-        self.pos_encoding = PositionalEncoding()
+        self.dm = dm
+        self.embedding = nn.Embedding(voca_size, dm)
+        self.pos_encoding = PositionalEncoding(dm, dropout)
         self.blks = nn.Sequential()
-        for i in range(3):
+        for i in range(num_layer):
             self.blks.add_module(str(i), DecodeLayer())
+        self.linear = nn.Linear(dm, voca_size)
 
-    def forward(self):
-        self.embedding()
-        self.pos_encoding()
+    def forward(self, X, valide_lens):
+        X = self.embedding(X) * math.sqrt(self.dm)
+        X = self.pos_encoding(X)
+        self.attention_weight1 = [None] * len(self.blks)
+        self.attention_weight2 = [None] * len(self.blks)
         for i, blk in enumerate(self.blks):
-            blk()
-        pass
+            X = blk(X, valide_lens)
+            self.attention_weight1[i] = blk.attention.attention.weights
+            self.attention_weight2[i] = blk.attention.attention.weights
+        return self.linear(X)
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, dm, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.dropout = nn.Dropout(dropout)
+        max_len = 1000
+        self.P = torch.zeros((1, max_len, dm))
+        i = torch.arange(max_len, dtype=torch.float32).reshape(-1, 1)
+        j = torch.arange(0, dm, 2, dtype=torch.float32)
+        X = i / torch.pow(10000, j / dm)
+        self.P[:, :, 0::2] = torch.sin(X)
+        self.P[:, :, 1::2] = torch.cos(X)
 
-    def forward(self):
-        pass
+    def forward(self, X):
+        print(self.__class__.__name__)
+        Y = X + self.P[:, : X.shape[1], :]
+        return self.dropout(Y)
 
 
 class TransformerDecoder(nn.Module):
@@ -86,102 +110,164 @@ class TransformerDecoder(nn.Module):
         super().__init__(*args, **kwargs)
 
     def forward(self):
+        print(self.__class__.__name__)
         pass
 
 
 class EncodeLayer(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, dm, num_hidden, num_head, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.attention = MultiHeadAttention()
-        self.resnorm = ResNorm()
-        self.ffn = FFN()
+        self.attention = MultiHeadAttention(dm, dm, dm, num_head, dropout)
+        self.resnorm1 = ResNorm(dm, dropout)
+        self.ffn = FFN(dm, num_hidden)
+        self.resnorm2 = ResNorm(dm, dropout)
 
-    def forward(self):
-        self.attention()
-        self.resnorm()
-        self.ffn()
-        pass
+    def forward(self, X, valid_lens=None):
+        print(self.__class__.__name__)
+        Y1 = self.attention(X, X, X, valid_lens)
+        Y2 = self.resnorm1(X, Y1)
+        Y3 = self.ffn(Y2)
+        Y = self.resnorm2(Y2, Y3)
+        return Y
 
 
 class DecodeLayer(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, idx, dm, num_hidden, num_head, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.attention1 = MultiHeadAttention()
-        self.resnorm1 = ResNorm()
-        self.attention2 = MultiHeadAttention()
-        self.resnorm2 = ResNorm()
-        self.ffn = FFN()
+        self.idx = idx
+        self.attention1 = MultiHeadAttention(dm, dm, dm, num_head, dropout)
+        self.resnorm1 = ResNorm(dm, dropout)
+        self.attention2 = MultiHeadAttention(dm, dm, dm, num_head, dropout)
+        self.resnorm2 = ResNorm(dm, dropout)
+        self.ffn = FFN(dm, num_hidden)
+        self.resnorm3 = ResNorm(dm, dropout)
 
-    def forward(self):
-        self.attention1()
-        self.resnorm1()
-        self.attention2()
-        self.resnorm2()
-        self.ffn()
-        pass
+    def forward(self, X, enc_output, enc_valid, dec_valid, key_value=None):
+        print(self.__class__.__name__)
+        if self.training:
+            bz, sz, _ = X.shape
+            dec_valid = torch.repeat_interleave(dec_valid, sz).reshape(bz * sz, -1)
+            tmp = torch.arange(1, sz + 1).repeat(bz, 1)
+            dec_valid = torch.min(dec_valid, tmp)
+        else:
+            dec_valid = None
+        if key_value[self.idx] is None:
+            key_value[self.idx] = X
+        else:
+            key_value[self.idx] = torch.cat((key_value[self.idx], X), dim=1)
+        Y = self.resnorm1(
+            X, self.attention1(X, key_value[self.idx], key_value[self.idx], dec_valid)
+        )
+        Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
+        return (
+            self.resnorm3(Y2, self.ffn(Y2)),
+            enc_output,
+            enc_valid,
+            key_value,
+        )
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, q_dim, k_dim, v_dim, num_head, *args, **kwargs) -> None:
+    def __init__(self, q_dim, k_dim, v_dim, num_head, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.num_head = num_head
         self.w_q = nn.Linear(q_dim, q_dim, bias=False)
         self.w_k = nn.Linear(k_dim, k_dim, bias=False)
         self.w_v = nn.Linear(v_dim, v_dim, bias=False)
-        self.attentin = DotProductAttention()
-        self.concat = Concat()
+        self.attention = DotProductAttention(dropout)
         self.w_o = nn.Linear(v_dim, v_dim, bias=False)
 
-    def forward(self, q, k, v, valid_lens):
+    def forward(self, q, k, v, valid_lens=None):
+        print(self.__class__.__name__)
         h_q = self.transpose_qkv(self.w_q(q))
         h_k = self.transpose_qkv(self.w_k(k))
         h_v = self.transpose_qkv(self.w_v(v))
-        self.attentin()
-        self.concat()
-        self.w_o()
-        pass
+        # h_q等大小是(bz*num_head,sz,dm/num_head),所以valid_lens也要同步扩大
+        if valid_lens is not None:
+            valid_lens = torch.repeat_interleave(valid_lens, self.num_head, dim=0)
+        output = self.attention(h_q, h_k, h_v, valid_lens)
+        output_concat = self.transpose_output(output)
+        return self.w_o(output_concat)
 
+    # 输入x:(bz,sz,dm),输出:(bz*num_head,sz,dm/num_head)
     def transpose_qkv(self, x: torch.Tensor):
-        bz, sz, dm = x.shape
-        dx = dm / self.num_head
-        x = x.reshape(bz, sz, self.num_head, -1)
-        x = x.permute(0, 2, 1, 3)
-        x = x.reshape(bz * self.num_head, sz, dx)
-        return x
+        bz, sz, _ = x.shape
+        return (
+            x.reshape(bz, sz, self.num_head, -1)
+            .permute(0, 2, 1, 3)
+            .reshape(bz * self.num_head, sz, -1)
+        )
 
+    # 输入x:(bz*num_head,sz,dm/num_head),输出:(bz,sz,dm)
     def transpose_output(self, x: torch.Tensor):
-        x = x.reshape(-1, self.num_heads, X.shape[1], X.shape[2])
+        x = x.reshape(-1, self.num_head, x.shape[1], x.shape[2])
         x = x.permute(0, 2, 1, 3)
         return x.reshape(x.shape[0], x.shape[1], -1)
-        pass
 
 
 class ResNorm(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, dm, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.dropout = nn.Dropout(dropout)
+        self.layernorm = nn.LayerNorm(dm)
 
-    def forward(self):
-        pass
+    def forward(self, X, Y):
+        print(self.__class__.__name__)
+        # 先执行dropout，再执行残差连接
+        Y = self.dropout(Y) + X
+        # 再执行layernorm
+        return self.layernorm(Y)
 
 
 class FFN(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, dm, num_hidden, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.linear1 = nn.Linear(dm, num_hidden, bias=True)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(num_hidden, dm, bias=True)
 
-    def forward(self):
-        pass
+    def forward(self, X):
+        print(self.__class__.__name__)
+        Y = self.linear1(X)
+        Y = self.relu(Y)
+        Y = self.linear2(Y)
+        return Y
 
 
 class DotProductAttention(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self):
-        # matmul(q,v)
-        # torch.masked_fill()
-        # torch.softmax()
-        # matmul(a,v)
-        pass
+    # 多头注意力中q,k,v都是(bz*num_head,sz,dm/num_head)
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        valid_lens=None,
+    ):
+        print(self.__class__.__name__)
+        # 总公式是 result = softmax(q*v_T/sqrt(dm))v,
+        # 计算q*v_T/sqrt(dm),v_T是v的转置，这里的dm我选择的是k，其实q，k，v都一样
+        scores = torch.bmm(q, k.permute(0, 2, 1)) / math.sqrt(k.shape[-1])
+        # 计算掩码并进行掩码操作
+        if valid_lens is not None:
+            # 编码器输入和输出的有效长度valid_len是维度为1的张量，大小是bz
+            if valid_lens.dim() == 1:
+                valid_lens = valid_lens.reshape(scores.shape[0], 1, 1)
+            # 解码器的输入有效长度valid_len是维度为2的张量，大小是(bz,sz)
+            else:
+                valid_lens = valid_lens.reshape(scores.shape[0], scores.shape[1], -1)
+            mask = torch.arange(scores.shape[-1], dtype=torch.int16).expand(
+                scores.shape
+            )
+            mask = mask >= valid_lens
+            scores = torch.masked_fill(scores, mask, 1e-6)
+        # 在最后一个维度执行softmax函数，得到的就是我们所说的注意力权重
+        self.weights = torch.softmax(scores, dim=-1)
+        # 计算权值与v的乘积，权值要先执行dropout
+        return torch.bmm(self.dropout(self.weights), v)
 
 
 class Concat(nn.Module):
@@ -189,4 +275,5 @@ class Concat(nn.Module):
         super().__init__(*args, **kwargs)
 
     def forward(self):
+        print(self.__class__.__name__)
         pass
