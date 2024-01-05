@@ -69,7 +69,7 @@ def test_PositionalEncoding():
     print(result)
 
 
-def test_TransformerDecoder():
+def test_TransformerEncoder():
     bz = 2
     sz = 10
     dm = 16
@@ -90,15 +90,141 @@ def test_TransformerDecoder():
     print(result.shape)
 
 
-key_values = [None] * 5
-for j in range(3):
-    for i in range(5):
-        print(i)
-        X = torch.ones((1, 1, 4)) + j
-        if key_values[i] is None:
-            print("none")
-            key_values[i] = X
-        else:
-            print("not none")
-            key_values[i] = torch.cat((key_values[i], X), dim=1)
-        print(key_values[i])
+def test_DecoderLayer_1():
+    bz = 2
+    sz = 10
+    dm = 16
+    num_hidden = 60
+    num_head = 4
+    dropout = 0.1
+    num_layer = 2
+    X = torch.randn((bz, sz, dm))
+    Y = torch.randn((bz, sz, dm))
+    enc_valid = torch.tensor([6, 9])
+    dec_valid = torch.tensor([7, 8])
+    el = EncodeLayer(dm, num_hidden, num_head, dropout)
+    enc_output = el(X, enc_valid)
+    dls = [
+        DecodeLayer(idx, dm, num_hidden, num_head, dropout) for idx in range(num_layer)
+    ]
+    for dl in dls:
+        Y = dl(Y, enc_output, enc_valid, dec_valid)
+    print(Y.shape)
+
+
+def test_DecoderLayer_2():
+    bz = 1
+    sz = 10
+    dm = 16
+    num_hidden = 60
+    num_head = 4
+    dropout = 0.1
+    num_layer = 2
+    epchos = 3
+    X = torch.randn((bz, sz, dm))
+    Y = torch.randn((bz, 1, dm))
+    enc_valid = torch.tensor([6])
+    dec_valid = None
+    el = EncodeLayer(dm, num_hidden, num_head, dropout)
+    enc_output = el(X, enc_valid)
+    dls = [
+        DecodeLayer(idx, dm, num_hidden, num_head, dropout) for idx in range(num_layer)
+    ]
+    key_value = [None] * num_layer
+    savd_Y = []
+    for j in range(epchos):
+        for dl in dls:
+            dl.training = False
+            savd_Y.append(Y)
+            Y, key_value = dl(Y, enc_output, enc_valid, dec_valid, key_value)
+        print(Y.shape)
+        print(key_value[0].shape)
+    for j in range(epchos):
+        for i in range(num_layer):
+            print(savd_Y[i + j * num_layer] - key_value[i][0, j, :] < 1e-6)
+
+
+def test_TransformerDecoder():
+    bz = 2
+    sz = 10
+    dm = 16
+    voca_size = 3000
+    num_hidden = 60
+    num_head = 4
+    dropout = 0.1
+    num_layer = 3
+    shape = (bz, sz)
+    X = torch.randint(0, voca_size, shape)
+    Y = torch.randint(0, voca_size, shape)
+    enc_valid = torch.tensor([7, 9])
+    dec_valid = torch.tensor([8, 6])
+    encoder = TransformerEncoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    decoder = TransformerDecoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    enc_output = encoder(X, enc_valid)
+    result = decoder(Y, enc_output, enc_valid, dec_valid)
+    print(X.shape)
+    print(Y.shape)
+    print(enc_output.shape)
+    print(result.shape)
+
+
+def test_TransformerDecoder2():
+    bz = 1
+    sz = 10
+    dm = 16
+    voca_size = 3000
+    num_hidden = 60
+    num_head = 4
+    dropout = 0.1
+    num_layer = 3
+    shape = (bz, sz)
+    X = torch.randint(0, voca_size, shape)
+    Y = torch.randint(0, voca_size, (1, 1))
+    enc_valid = torch.tensor([8])
+    dec_valid = None
+    encoder = TransformerEncoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    decoder = TransformerDecoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    enc_output = encoder(X, enc_valid)
+    decoder.eval()
+    for i in range(3):
+        Y_hat = decoder(Y, enc_output, enc_valid, dec_valid)
+        Y = torch.argmax(Y_hat, dim=-1)
+        print(Y)
+        print(decoder.key_value[0].shape)
+        print("*******************************")
+
+
+def test_Transformer():
+    bz = 2
+    sz = 10
+    dm = 16
+    voca_size = 3000
+    num_hidden = 60
+    num_head = 4
+    dropout = 0.1
+    num_layer = 3
+    shape = (bz, sz)
+    X = torch.randint(0, voca_size, shape)
+    Y = torch.randint(0, voca_size, (1, 1))
+    enc_valid = torch.tensor([8, 7])
+    dec_valid = torch.tensor([6, 9])
+    encoder = TransformerEncoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    decoder = TransformerDecoder(
+        voca_size, dm, num_hidden, num_head, dropout, num_layer
+    )
+    trf = Transformer(encoder, decoder)
+    result = trf(X, Y, enc_valid, dec_valid)
+    print(result.shape)
+
+
+test_Transformer()
