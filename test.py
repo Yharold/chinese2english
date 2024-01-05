@@ -107,9 +107,13 @@ def test_DecoderLayer_1():
     dls = [
         DecodeLayer(idx, dm, num_hidden, num_head, dropout) for idx in range(num_layer)
     ]
+    KV = [None] * num_layer
+    dec_input = (Y, KV, dec_valid)
+    enc_info = (enc_output, enc_valid)
     for dl in dls:
-        Y = dl(Y, enc_output, enc_valid, dec_valid)
-    print(Y.shape)
+        dec_input, enc_info = dl(dec_input, enc_info)
+        print(dec_input[0].shape)
+        print(KV[0].shape)
 
 
 def test_DecoderLayer_2():
@@ -130,18 +134,22 @@ def test_DecoderLayer_2():
     dls = [
         DecodeLayer(idx, dm, num_hidden, num_head, dropout) for idx in range(num_layer)
     ]
-    key_value = [None] * num_layer
+    KV = [None] * num_layer
+    dec_input = (Y, KV, dec_valid)
+    enc_info = (enc_output, enc_valid)
     savd_Y = []
     for j in range(epchos):
         for dl in dls:
-            dl.training = False
-            savd_Y.append(Y)
-            Y, key_value = dl(Y, enc_output, enc_valid, dec_valid, key_value)
+            savd_Y.append(dec_input[0])
+            dec_input, enc_info = dl(dec_input, enc_info)
         print(Y.shape)
-        print(key_value[0].shape)
+        print(dec_input[1].shape)
     for j in range(epchos):
         for i in range(num_layer):
-            print(savd_Y[i + j * num_layer] - key_value[i][0, j, :] < 1e-6)
+            print(savd_Y[i + j * num_layer] - dec_input[1][i][0, j, :] < 1e-6)
+
+
+test_DecoderLayer_2()
 
 
 def test_TransformerDecoder():
@@ -225,6 +233,3 @@ def test_Transformer():
     trf = Transformer(encoder, decoder)
     result = trf(X, Y, enc_valid, dec_valid)
     print(result.shape)
-
-
-test_Transformer()

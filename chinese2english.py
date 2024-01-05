@@ -109,22 +109,21 @@ class TransformerDecoder(nn.Module):
             )
         self.linear = nn.Linear(dm, voca_size)
         self.key_value = [None] * num_layer
+        self.weights = [[None] * num_layer] * 2
 
-    def forward(self, X, enc_output, enc_valid, dec_valid=None):
-        X = self.embedding(X) * math.sqrt(self.dm)
-        X = self.pos_encoding(X)
-        self.attention_weight1 = [None] * len(self.blks)
-        self.attention_weight2 = [None] * len(self.blks)
+    def forward(self, X, dec_valid, enc_output, enc_valid):
+        X = self.pos_encoding(self.embedding(X) * math.sqrt(self.dm))
+        if dec_valid.dim() == 1:
+            bz, sz, _ = X.shape
+            dec_valid = torch.repeat_interleave(dec_valid, sz).reshape(bz, -1)
+            dec_valid = torch.min(dec_valid, torch.arange(1, sz + 1).repeat(bz, 1))
+        enc_info = (enc_output, enc_valid)
+        dec_input = (X, self.key_value, dec_valid)
         for i, blk in enumerate(self.blks):
-            if self.training:
-                X = blk(X, enc_output, enc_valid, dec_valid)
-                self.attention_weight1[i] = blk.attention1.attention.weights
-                self.attention_weight2[i] = blk.attention2.attention.weights
-            else:
-                X, self.key_value = blk(
-                    X, enc_output, enc_valid, dec_valid, self.key_value
-                )
-        return self.linear(X)
+            dec_input, enc_info = blk(dec_input, enc_info)
+            self.weights[0][i] = blk.attention1.attention.weights
+            self.weights[1][i] = blk.attention2.attention.weights
+        return self.linear(dec_input[0])
 
 
 class PositionalEncoding(nn.Module):
@@ -214,7 +213,7 @@ class DecodeLayer(nn.Module):
             KV[self.idx] = Q
         else:
             KV[self.idx] = torch.cat((KV[self.idx], Q), dim=-1)
-        Y = self.resnorm1(Q, self.attention1(Q, KV, KV, dec_valid))
+        Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_valid))
         Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
         Y3 = self.resnorm3(Y2, self.ffn(Y2))
         return (Y3, KV, dec_valid), enc_info
