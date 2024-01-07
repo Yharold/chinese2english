@@ -7,10 +7,10 @@ from torch import nn
 
 
 class Chinese2English:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, net, bz, epchos, optimizer, loss, learning_rate) -> None:
+        self.net = net
 
-    def train():
+    def train(data):
         # 处理数据，得到词表。这里应该分为中文词表和英文词表
 
         # 将数据分为训练集和测试集
@@ -20,11 +20,14 @@ class Chinese2English:
         # 循环次数
 
         # 批量次数
-
+        
         pass
 
     def predict():
         pass
+
+
+nn.CrossEntropyLoss()
 
 
 class Transformer(nn.Module):
@@ -35,7 +38,7 @@ class Transformer(nn.Module):
 
     def forward(self, X, Y, enc_valid, dec_valid):
         enc_output = self.encoder(X, enc_valid)
-        return self.decoder(Y, enc_output, enc_valid, dec_valid)
+        return self.decoder(Y, dec_valid, enc_output, enc_valid)
 
 
 class TransformerEncoder(nn.Module):
@@ -61,39 +64,6 @@ class TransformerEncoder(nn.Module):
         return X
 
 
-# class TransformerDecoder(nn.Module):
-#     def __init__(
-#         self, voca_size, dm, num_hidden, num_head, dropout, num_layer, *args, **kwargs
-#     ) -> None:
-#         super().__init__(*args, **kwargs)
-#         self.dm = dm
-#         self.embedding = nn.Embedding(voca_size, dm)
-#         self.pos_encoding = PositionalEncoding(dm, dropout)
-#         self.blks = nn.Sequential()
-#         for i in range(num_layer):
-#             self.blks.add_module(
-#                 str(i), DecodeLayer(i, dm, num_hidden, num_head, dropout)
-#             )
-#         self.linear = nn.Linear(dm, voca_size)
-#         self.key_value = [None] * num_layer
-
-#     def forward(self, X, enc_output, enc_valid, dec_valid=None):
-#         X = self.embedding(X) * math.sqrt(self.dm)
-#         X = self.pos_encoding(X)
-#         self.attention_weight1 = [None] * len(self.blks)
-#         self.attention_weight2 = [None] * len(self.blks)
-#         for i, blk in enumerate(self.blks):
-#             if self.training:
-#                 X = blk(X, enc_output, enc_valid, dec_valid)
-#                 self.attention_weight1[i] = blk.attention1.attention.weights
-#                 self.attention_weight2[i] = blk.attention2.attention.weights
-#             else:
-#                 X, self.key_value = blk(
-#                     X, enc_output, enc_valid, dec_valid, self.key_value
-#                 )
-#         return self.linear(X)
-
-
 class TransformerDecoder(nn.Module):
     def __init__(
         self, voca_size, dm, num_hidden, num_head, dropout, num_layer, *args, **kwargs
@@ -113,7 +83,7 @@ class TransformerDecoder(nn.Module):
 
     def forward(self, X, dec_valid, enc_output, enc_valid):
         X = self.pos_encoding(self.embedding(X) * math.sqrt(self.dm))
-        if dec_valid.dim() == 1:
+        if dec_valid is not None and dec_valid.dim() == 1:
             bz, sz, _ = X.shape
             dec_valid = torch.repeat_interleave(dec_valid, sz).reshape(bz, -1)
             dec_valid = torch.min(dec_valid, torch.arange(1, sz + 1).repeat(bz, 1))
@@ -158,42 +128,6 @@ class EncodeLayer(nn.Module):
         return self.resnorm2(Y, self.ffn(Y))
 
 
-# class DecodeLayer(nn.Module):
-#     def __init__(self, idx, dm, num_hidden, num_head, dropout, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-#         self.idx = idx
-#         self.attention1 = MultiHeadAttention(dm, dm, dm, num_head, dropout)
-#         self.resnorm1 = ResNorm(dm, dropout)
-#         self.attention2 = MultiHeadAttention(dm, dm, dm, num_head, dropout)
-#         self.resnorm2 = ResNorm(dm, dropout)
-#         self.ffn = FFN(dm, num_hidden)
-#         self.resnorm3 = ResNorm(dm, dropout)
-
-#     def forward(self, X, enc_output, enc_valid, dec_valid, key_value=None):
-#         print(self.__class__.__name__)
-#         if self.training:
-#             bz, sz, _ = X.shape
-#             dec_valid = torch.repeat_interleave(dec_valid, sz).reshape(bz, -1)
-#             tmp = torch.arange(1, sz + 1).repeat(bz, 1)
-#             dec_valid = torch.min(dec_valid, tmp)
-
-#             Y = self.resnorm1(X, self.attention1(X, X, X, dec_valid))
-#             Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
-#             return self.resnorm3(Y2, self.ffn(Y2))
-#         else:
-#             dec_valid = None
-#             if key_value[self.idx] is None:
-#                 key_value[self.idx] = X
-#             else:
-#                 key_value[self.idx] = torch.cat((key_value[self.idx], X), dim=1)
-#             Y = self.resnorm1(
-#                 X,
-#                 self.attention1(X, key_value[self.idx], key_value[self.idx], dec_valid),
-#             )
-#             Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
-#             return self.resnorm3(Y2, self.ffn(Y2)), key_value
-
-
 class DecodeLayer(nn.Module):
     def __init__(self, idx, dm, num_hidden, num_head, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -212,7 +146,7 @@ class DecodeLayer(nn.Module):
         if KV[self.idx] is None:
             KV[self.idx] = Q
         else:
-            KV[self.idx] = torch.cat((KV[self.idx], Q), dim=-1)
+            KV[self.idx] = torch.cat((KV[self.idx], Q), dim=1)
         Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_valid))
         Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
         Y3 = self.resnorm3(Y2, self.ffn(Y2))
@@ -328,4 +262,3 @@ class Concat(nn.Module):
 
     def forward(self):
         print(self.__class__.__name__)
-        pass

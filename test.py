@@ -143,13 +143,10 @@ def test_DecoderLayer_2():
             savd_Y.append(dec_input[0])
             dec_input, enc_info = dl(dec_input, enc_info)
         print(Y.shape)
-        print(dec_input[1].shape)
+        print(dec_input[1][0].shape)
     for j in range(epchos):
         for i in range(num_layer):
             print(savd_Y[i + j * num_layer] - dec_input[1][i][0, j, :] < 1e-6)
-
-
-test_DecoderLayer_2()
 
 
 def test_TransformerDecoder():
@@ -173,7 +170,7 @@ def test_TransformerDecoder():
         voca_size, dm, num_hidden, num_head, dropout, num_layer
     )
     enc_output = encoder(X, enc_valid)
-    result = decoder(Y, enc_output, enc_valid, dec_valid)
+    result = decoder(Y, dec_valid, enc_output, enc_valid)
     print(X.shape)
     print(Y.shape)
     print(enc_output.shape)
@@ -203,7 +200,7 @@ def test_TransformerDecoder2():
     enc_output = encoder(X, enc_valid)
     decoder.eval()
     for i in range(3):
-        Y_hat = decoder(Y, enc_output, enc_valid, dec_valid)
+        Y_hat = decoder(Y, dec_valid, enc_output, enc_valid)
         Y = torch.argmax(Y_hat, dim=-1)
         print(Y)
         print(decoder.key_value[0].shape)
@@ -221,7 +218,7 @@ def test_Transformer():
     num_layer = 3
     shape = (bz, sz)
     X = torch.randint(0, voca_size, shape)
-    Y = torch.randint(0, voca_size, (1, 1))
+    Y = torch.randint(0, voca_size, (bz, sz))
     enc_valid = torch.tensor([8, 7])
     dec_valid = torch.tensor([6, 9])
     encoder = TransformerEncoder(
@@ -233,3 +230,24 @@ def test_Transformer():
     trf = Transformer(encoder, decoder)
     result = trf(X, Y, enc_valid, dec_valid)
     print(result.shape)
+
+
+def test_tokenizer():
+    from tokenizers import Tokenizer
+    from tokenizers.models import BPE
+    from tokenizers.pre_tokenizers import Whitespace
+    from tokenizers.trainers import BpeTrainer
+
+    tokenizer = Tokenizer(BPE())
+
+    tokenizer.pre_tokenizer = Whitespace()
+
+    trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
+    tokenizer.train(files=[".\datasets\CMN_TRAD_SEG.txt"], trainer=trainer)
+    output = tokenizer.encode("Hello, y'all! How are you 😁 ?")
+    vocab = tokenizer.get_vocab()
+    print(output.tokens)
+    # print()
+    # ["Hello", ",", "y", "'", "all", "!", "How", "are", "you", "[UNK]", "?"]
+
+test_tokenizer()
