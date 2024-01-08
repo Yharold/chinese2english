@@ -263,7 +263,7 @@ def test_my_tokenizer():
     # ch_data, en_data = read_data(filepath)
     # tokenizer = my_tokenizer(ch_data)
     tokenizer = Tokenizer.from_file("ch.json")
-    
+
     tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=10)
     num_seq = tokenizer.encode("他开始了工作！")
     mask = num_seq.attention_mask
@@ -277,6 +277,15 @@ def test_my_tokenizer():
     print(ch_seq)
 
 
-test_my_tokenizer()
+def custom_dataloader(bz, shuffle=True, num_workers=0):
+    filepath = "datasets\\translation2019zh_valid.json"
+    chinese_data, english_data = read_data(filepath)
+    dataset = CustomDataset(chinese_data, english_data)
+    dataloader = DataLoader(dataset, bz, shuffle=shuffle, num_workers=num_workers)
+    data, label = next(iter(dataloader))
+    print(data[0])
+    print(label[0])
 
+
+custom_dataloader(10)
 # test_tokenizer()

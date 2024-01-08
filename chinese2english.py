@@ -1,3 +1,4 @@
+from typing import Iterable, Optional, Sequence, Union
 import torch
 import math
 from torch import nn
@@ -10,9 +11,27 @@ from tokenizers.processors import TemplateProcessing
 from tokenizers.trainers import BpeTrainer
 from tokenizers.decoders import BPEDecoder
 import json
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 
-def my_tokenizer(data):
+class CustomDataset(Dataset):
+    def __init__(self, feature, label) -> None:
+        super().__init__()
+        if len(feature) == len(label):
+            self.feature = feature
+            self.label = label
+            self.length = len(feature)
+        else:
+            print("feature is not  equal to label")
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return (self.feature[index], self.label[index])
+
+
+def custom_tokenizer(data):
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
     tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
     tokenizer.pre_tokenizer = Whitespace()
