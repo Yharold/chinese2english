@@ -1,9 +1,51 @@
 import torch
 import math
+from torch import nn
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
+from tokenizers import normalizers
+from tokenizers.normalizers import NFD, Lowercase, StripAccents
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
 from tokenizers.trainers import BpeTrainer
-from torch import nn
+from tokenizers.decoders import BPEDecoder
+import json
+
+
+def my_tokenizer(data):
+    tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+    tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
+    tokenizer.pre_tokenizer = Whitespace()
+    trainer = BpeTrainer(
+        vocab_size=30000,
+        special_tokens=["[UNK]", "[BOS]", "[EOS]", "[PAD]"],
+    )
+    tokenizer.decoder = BPEDecoder()
+    tokenizer.post_processor = TemplateProcessing(
+        single="[BOS] $A [EOS]",
+        # pair="[BOS] $A [PAD] $B:1 [PAD]:1",
+        special_tokens=[
+            ("[BOS]", 1),
+            ("[EOS]", 2),
+            ("[PAD]", 3),
+        ],
+    )
+    if type(data) == "str":
+        tokenizer.train(data)
+    if hasattr(data, "__iter__"):
+        tokenizer.train_from_iterator(data, trainer)
+    return tokenizer
+
+
+def read_data(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = [json.loads(line.strip()) for line in f.readlines()]
+    chinese_data = []
+    english_data = []
+    for line in data:
+        chinese_data.append(line["chinese"])
+        english_data.append(line["english"])
+    return chinese_data, english_data
 
 
 class Chinese2English:
@@ -20,7 +62,7 @@ class Chinese2English:
         # 循环次数
 
         # 批量次数
-        
+
         pass
 
     def predict():

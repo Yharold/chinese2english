@@ -241,13 +241,42 @@ def test_tokenizer():
     tokenizer = Tokenizer(BPE())
 
     tokenizer.pre_tokenizer = Whitespace()
-
     trainer = BpeTrainer(special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
-    tokenizer.train(files=[".\datasets\CMN_TRAD_SEG.txt"], trainer=trainer)
-    output = tokenizer.encode("Hello, y'all! How are you 😁 ?")
-    vocab = tokenizer.get_vocab()
-    print(output.tokens)
-    # print()
-    # ["Hello", ",", "y", "'", "all", "!", "How", "are", "you", "[UNK]", "?"]
+    files = [
+        f"datasets\wikitext-103-raw\wiki.{split}.raw"
+        for split in ["test", "train", "valid"]
+    ]
+    tokenizer.train(files, trainer)
+    tokenizer.save("datasets/tokenizer-wiki.json")
+    # tokenizer = Tokenizer.from_file("data/tokenizer-wiki.json")
 
-test_tokenizer()
+
+def test_read_data():
+    filepath = "datasets/translation2019zh_valid.json"
+    ch_data, en_data = read_data(filepath)
+    print(ch_data[0:10])
+    print(en_data[0:10])
+
+
+def test_my_tokenizer():
+    # filepath = "datasets/translation2019zh_valid.json"
+    # ch_data, en_data = read_data(filepath)
+    # tokenizer = my_tokenizer(ch_data)
+    tokenizer = Tokenizer.from_file("ch.json")
+    
+    tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=10)
+    num_seq = tokenizer.encode("他开始了工作！")
+    mask = num_seq.attention_mask
+    print(num_seq.tokens)
+    print(num_seq.ids)
+    print(mask)
+    print(torch.sum(torch.tensor(mask)).item())
+    print(num_seq)
+
+    ch_seq = tokenizer.decode(num_seq.ids)
+    print(ch_seq)
+
+
+test_my_tokenizer()
+
+# test_tokenizer()
