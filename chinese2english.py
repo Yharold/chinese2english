@@ -1,12 +1,12 @@
 import math
+from typing import Optional
 import torch
 from torch.utils.data import DataLoader, Dataset
-from torch import nn
+from torch import Tensor, nn
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers import normalizers
-from tokenizers.normalizers import NFD, Lowercase, StripAccents
-from tokenizers.pre_tokenizers import Whitespace
+import tokenizers.pre_tokenizers
 from tokenizers.processors import TemplateProcessing
 from tokenizers.trainers import BpeTrainer
 from tokenizers.decoders import BPEDecoder
@@ -33,18 +33,25 @@ class CustomDataset(Dataset):
         return (self.feature[index], self.label[index])
 
 
-def custom_tokenizer(data, sz=64):
+def custom_tokenizer(
+    data, vz, sz, language="english", special_tok=["[UNK]", "[BOS]", "[EOS]", "[PAD]"]
+):
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
-    tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
-    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.normalizer = normalizers.Sequence(
+        [normalizers.NFD(), normalizers.Lowercase(), normalizers.StripAccents()]
+    )
+    if language == "chinese":
+        tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Metaspace()
+    else:
+        tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
+
     trainer = BpeTrainer(
-        vocab_size=30000,
-        special_tokens=["[UNK]", "[BOS]", "[EOS]", "[PAD]"],
+        vocab_size=vz,
+        special_tokens=special_tok,
     )
     tokenizer.decoder = BPEDecoder()
     tokenizer.post_processor = TemplateProcessing(
         single="[BOS] $A [EOS]",
-        # pair="[BOS] $A [PAD] $B:1 [PAD]:1",
         special_tokens=[
             ("[BOS]", 1),
             ("[EOS]", 2),
@@ -60,17 +67,19 @@ def custom_tokenizer(data, sz=64):
     return tokenizer
 
 
-def load_tokenizer(sz=64):
+def load_tokenizer(vocab_size, sz):
     feature, label = read_data()
     if "enc_tokenizer.json" in os.listdir("./datasets"):
         enc_tokenizer = Tokenizer.from_file(".\datasets\enc_tokenizer.json")
     else:
-        enc_tokenizer = custom_tokenizer(feature, sz)
+        print("train enc_tokenizer")
+        enc_tokenizer = custom_tokenizer(feature, vocab_size, sz, language="chinese")
         enc_tokenizer.save(".\datasets\enc_tokenizer.json")
     if "dec_tokenizer.json" in os.listdir("./datasets"):
         dec_tokenizer = Tokenizer.from_file(".\datasets\dec_tokenizer.json")
     else:
-        dec_tokenizer = custom_tokenizer(label, sz)
+        print("train dec_tokenizer")
+        dec_tokenizer = custom_tokenizer(label, vocab_size, sz, language="english")
         dec_tokenizer.save(".\datasets\dec_tokenizer.json")
     return feature, label, enc_tokenizer, dec_tokenizer
 
@@ -90,80 +99,112 @@ class Chinese2English:
     def __init__(self) -> None:
         pass
 
-    def train(self, net, epchos, bz, lr, device="cpu"):
-        # 处理数据，得到词表。这里应该分为中文词表和英文词表
-        feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer()
-        # 将数据分为训练集和测试集
-        data_size = len(feature)
-        train_data = CustomDataset(
-            feature[0 : int(data_size * 0.8)], label[0 : int(data_size * 0.8)]
-        )
-        test_data = CustomDataset(
-            feature[int(data_size * 0.8) :], label[int(data_size * 0.8) :]
-        )
-        # 得到DataLoader
-        train_dataloader = DataLoader(train_data, bz, shuffle=True)
-        test_dataloader = DataLoader(test_data, bz, shuffle=True)
-        # 初始化模型
-        net.apply(self.init_net)
-        loss = nn.CrossEntropyLoss(reduction="none")
-        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-        # 进行训练
-        net.train()
-        loss_record = []
-        for epcho in range(epchos):
-            metric = [0.0, 0.0, 0.0]
-            start_time = time.time()
-            for iter in train_dataloader:
-                X, Y = iter[0], iter[1]
-                X = enc_tokenizer.encode_batch(X)
-                enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
-                Y = dec_tokenizer.encode_batch(Y)
-                Y_mask = torch.tensor([y.attention_mask for y in Y])
-                dec_valid = torch.tensor([sum(y) for y in Y_mask])
-                X = torch.tensor([x.ids for x in X])
-                Y = torch.tensor([y.ids for y in Y])
-                dec_output = net(X, Y, enc_valid, dec_valid)
-                loss_res = loss(dec_output.permute(0, 2, 1), Y)
-                loss_res = (loss_res * Y_mask).mean(dim=1).sum()
-                loss_res.backward()
-                grad_clipping(net, 1)
+    # def train(self, net, epchos, bz, vz, sz, lr, device="cpu"):
+    #     torch.autograd.set_detect_anomaly(True)
+    #     # 处理数据，得到词表。这里应该分为中文词表和英文词表
+    #     feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer(vz, sz)
+    #     # 将数据分为训练集和测试集
+    #     data_size = len(feature)
+    #     train_data = CustomDataset(
+    #         feature[0 : int(data_size * 0.8)], label[0 : int(data_size * 0.8)]
+    #     )
+    #     test_data = CustomDataset(
+    #         feature[int(data_size * 0.8) :], label[int(data_size * 0.8) :]
+    #     )
+    #     # 得到DataLoader
+    #     train_dataloader = DataLoader(train_data, bz, shuffle=True)
+    #     test_dataloader = DataLoader(test_data, bz, shuffle=True)
+
+    #     # 初始化模型
+    #     def init_net(m):
+    #         if isinstance(m, nn.Linear):
+    #             nn.init.xavier_uniform_(m.weight)
+    #             if m.bias is not None:
+    #                 nn.init.zeros_(m.bias)
+    #         if isinstance(m, nn.Embedding):
+    #             nn.init.xavier_uniform_(m.weight)
+
+    #     net.apply(init_net)
+    #     loss = CustomLoss()
+    #     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    #     # 进行训练
+    #     net.train()
+    #     loss_record = []
+    #     for epcho in range(epchos):
+    #         metric = [0.0, 0.0, 0.0]
+    #         start_time = time.time()
+    #         for iter in train_dataloader:
+    #             X, Y = iter[0], iter[1]
+    #             X = enc_tokenizer.encode_batch(X)
+    #             enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
+    #             Y = dec_tokenizer.encode_batch(Y)
+    #             Y_mask = torch.tensor([y.attention_mask for y in Y])
+    #             dec_valid = torch.tensor([sum(y) for y in Y_mask])
+    #             X = torch.tensor([x.ids for x in X])
+    #             Y = torch.tensor([y.ids for y in Y])
+    #             dec_output = net(X, Y, enc_valid, dec_valid)
+    #             l = loss(dec_output, Y, Y_mask)
+    #             # 清零梯度
+    #             optimizer.zero_grad()
+    #             # 计算梯度
+    #             l.backward()
+    #             # grad_clipping(net, 1)
+    #             # 更新梯度
+    #             optimizer.step()
+    #             torch.cuda.empty_cache()
+    #             with torch.no_grad():
+    #                 metric[0] += l
+    #                 metric[1] += dec_valid.sum()
+    #                 metric[2] += time.time() - start_time
+    #             loss_record.append(metric[0] / metric[1])
+    #             print(loss_record[-1])
+    #         if (epcho + 1) % 10 == 0:
+    #             filename = "./datasets/net/transformer-" + str(epcho)
+    #             torch.save(net.state_dict(), filename)
+    #     print(
+    #         f"loss {loss_record[epcho]:.3f}, {metric[1] / metric[2]:.1f} "
+    #         f"tokens/sec on {str(device)}"
+    #     )
+    #     torch.save(net.state_dict(), "./datasets/net/transformer-all_done")
+
+    # 输入模型，处理好的包含了feture,label的dataloader,num_epochs,lr
+    def train(model: nn.Module, dataloader: DataLoader, num_epochs, lr):
+        def init_model(m):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            if isinstance(m, nn.Embedding):
+                nn.init.xavier_uniform_(m.weight)
+
+        model.apply(init_model)
+        loss = CustomLoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        for epoch in range(num_epochs):
+            for iter in dataloader:
+                X, Y, X_valid, Y_valid, Y_mask = (
+                    iter[0],
+                    iter[1],
+                    iter[2],
+                    iter[3],
+                    iter[4],
+                )
+                pred = model(X, Y, X_valid, Y_valid)
+                l = loss(pred, Y, Y_mask)
+                optimizer.zero_grad()
+                l.backward()
                 optimizer.step()
-                with torch.no_grad():
-                    metric[0] += loss_res
-                    metric[1] += dec_valid.sum()
-                    metric[2] += time.time() - start_time
-            loss_record.append(metric[0] / metric[1])
-            if (epcho + 1) % 10 == 0:
-                filename = "./datasets/net/transformer-" + str(epcho)
-                torch.save(net.state_dict(), filename)
-        print(f'loss {metric[0] / metric[1]:.3f}, {metric[1] / metric[2]:.1f} '
-          f'tokens/sec on {str(device)}')
-        torch.save(net.state_dict(), "./datasets/net/transformer-all_done")
-        # 计算BLEU分数
-        net.eval()
-        for iter in test_dataloader:
-            X, Y = iter[0], iter[1]
-            X = enc_tokenizer.encode_batch(X)
-            enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
-            Y = dec_tokenizer.encode_batch(Y)
-            Y_mask = torch.tensor([y.attention_mask for y in Y])
-            dec_valid = torch.tensor([sum(y) for y in Y_mask])
-            X = torch.tensor([x.ids for x in X])
-            Y = torch.tensor([y.ids for y in Y])
-            dec_output = net(X, Y, enc_valid, dec_valid)
-            loss_res = loss(dec_output.permute(0, 2, 1), Y)
-            loss_res = (loss_res * Y_mask).mean(dim=1)
 
     def predict():
         pass
 
-    def init_net(m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
-            nn.init.zeros_(m.bias)
-        if isinstance(m, nn.Embedding):
-            nn.init.xavier_uniform_(m.weight)
+
+class CustomLoss(nn.CrossEntropyLoss):
+    def forward(self, pred: torch.Tensor, label: torch.Tensor, Y_mask: torch.Tensor):
+        self.reduction = "none"
+        unweighted_loss = super(CustomLoss, self).forward(pred.permute(0, 2, 1), label)
+        weighted_loss = (unweighted_loss * Y_mask).mean(dim=1).sum()
+        return weighted_loss
 
 
 def grad_clipping(net, theta):

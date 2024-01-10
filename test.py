@@ -287,65 +287,38 @@ def custom_dataloader(bz, shuffle=True, num_workers=0):
     print(label[0])
 
 
-def test_train():
-    bz = 2
-    sz = 64
-    dm = 64
-    voca_size = 30000
-    num_hidden = 60
-    num_head = 4
-    dropout = 0.1
-    num_layer = 3
-    encoder = TransformerEncoder(
-        voca_size, dm, num_hidden, num_head, dropout, num_layer
-    )
-    decoder = TransformerDecoder(
-        voca_size, dm, num_hidden, num_head, dropout, num_layer
-    )
-    net = Transformer(encoder, decoder)
-
-    # 处理数据，得到词表。这里应该分为中文词表和英文词表
-    feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer()
-
-    # 将数据分为训练集和测试集
-    data_size = len(feature)
-    train_data = CustomDataset(
-        feature[0 : int(data_size * 0.8)], label[0 : int(data_size * 0.8)]
-    )
-    # 得到DataLoader
-    train_dataloader = DataLoader(train_data, bz, shuffle=True)
-    # 初始化模型
-    loss = nn.CrossEntropyLoss(reduction="none")
-
-    # 进行训练
-    for _ in range(3):
-        for iter in train_dataloader:
-            X, Y = iter[0], iter[1]
-            X = enc_tokenizer.encode_batch(X)
-            enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
-            Y = dec_tokenizer.encode_batch(Y)
-            Y_mask = torch.tensor([y.attention_mask for y in Y])
-            dec_valid = torch.tensor([sum(y) for y in Y_mask])
-            X = torch.tensor([x.ids for x in X])
-            Y = torch.tensor([y.ids for y in Y])
-            print(X.shape)
-            print(Y.shape)
-            print(enc_valid)
-            print(dec_valid)
-            dec_output = net(X, Y, enc_valid, dec_valid)
-            unweighted_loss = loss(dec_output.permute(0, 2, 1), Y)
-            print(unweighted_loss.shape)
-            weighted_loss = (unweighted_loss * Y_mask).mean(dim=1)
-            weighted_loss.sum().backward()
-            print(weighted_loss)
-
-
 def test_load_tokenizer():
-    feature, label, enc_tok, dec_tok = load_tokenizer()
+    vz = 10000
+    sz = 32
+    feature, label, enc_tok, dec_tok = load_tokenizer(vz, sz)
+    print(len(enc_tok.get_vocab()))
+    print(len(dec_tok.get_vocab()))
+    print(len(feature))
+    print(len(label))  # 39323
     print(feature[0])
     print(label[0])
     print(enc_tok.encode("我使大家高兴！").ids)
+    print(enc_tok.encode("我使大家高兴！").tokens)
     print(dec_tok.encode("I make everybody happy!").ids)
+    print(dec_tok.encode("I make everybody happy!").tokens)
 
+
+def test_train():
+    epchos = 1
+    bz = 64
+    vz = 8000
+    sz = 32
+    lr = 0.001
+    device = "cpu"
+    dm = 16
+    num_head = 4
+    num_hidden = 64
+    dropout = 0.1
+    num_layer = 8
+    encoder = TransformerEncoder(vz, dm, num_hidden, num_head, dropout, num_layer)
+    decoder = TransformerDecoder(vz, dm, num_hidden, num_head, dropout, num_layer)
+    net = Transformer(encoder, decoder)
+    c2e = Chinese2English()
+    c2e.train(net, epchos, bz, vz, sz, lr, device)
 
 test_train()
