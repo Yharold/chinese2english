@@ -1,6 +1,6 @@
-from typing import Iterable, Optional, Sequence, Union
-import torch
 import math
+import torch
+from torch.utils.data import DataLoader, Dataset
 from torch import nn
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -11,7 +11,9 @@ from tokenizers.processors import TemplateProcessing
 from tokenizers.trainers import BpeTrainer
 from tokenizers.decoders import BPEDecoder
 import json
-from torch.utils.data import DataLoader, Dataset, Sampler
+from IPython import display
+import os
+import time
 
 
 class CustomDataset(Dataset):
@@ -31,7 +33,7 @@ class CustomDataset(Dataset):
         return (self.feature[index], self.label[index])
 
 
-def custom_tokenizer(data):
+def custom_tokenizer(data, sz=64):
     tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
     tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
     tokenizer.pre_tokenizer = Whitespace()
@@ -53,10 +55,27 @@ def custom_tokenizer(data):
         tokenizer.train(data)
     if hasattr(data, "__iter__"):
         tokenizer.train_from_iterator(data, trainer)
+    tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=sz)
+    tokenizer.enable_truncation(max_length=sz)
     return tokenizer
 
 
-def read_data(filepath):
+def load_tokenizer(sz=64):
+    feature, label = read_data()
+    if "enc_tokenizer.json" in os.listdir("./datasets"):
+        enc_tokenizer = Tokenizer.from_file(".\datasets\enc_tokenizer.json")
+    else:
+        enc_tokenizer = custom_tokenizer(feature, sz)
+        enc_tokenizer.save(".\datasets\enc_tokenizer.json")
+    if "dec_tokenizer.json" in os.listdir("./datasets"):
+        dec_tokenizer = Tokenizer.from_file(".\datasets\dec_tokenizer.json")
+    else:
+        dec_tokenizer = custom_tokenizer(label, sz)
+        dec_tokenizer.save(".\datasets\dec_tokenizer.json")
+    return feature, label, enc_tokenizer, dec_tokenizer
+
+
+def read_data(filepath="datasets\\translation2019zh_valid.json"):
     with open(filepath, "r", encoding="utf-8") as f:
         data = [json.loads(line.strip()) for line in f.readlines()]
     chinese_data = []
@@ -68,27 +87,97 @@ def read_data(filepath):
 
 
 class Chinese2English:
-    def __init__(self, net, bz, epchos, optimizer, loss, learning_rate) -> None:
-        self.net = net
-
-    def train(data):
-        # 处理数据，得到词表。这里应该分为中文词表和英文词表
-
-        # 将数据分为训练集和测试集
-
-        # 进行训练
-
-        # 循环次数
-
-        # 批量次数
-
+    def __init__(self) -> None:
         pass
+
+    def train(self, net, epchos, bz, lr, device="cpu"):
+        # 处理数据，得到词表。这里应该分为中文词表和英文词表
+        feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer()
+        # 将数据分为训练集和测试集
+        data_size = len(feature)
+        train_data = CustomDataset(
+            feature[0 : int(data_size * 0.8)], label[0 : int(data_size * 0.8)]
+        )
+        test_data = CustomDataset(
+            feature[int(data_size * 0.8) :], label[int(data_size * 0.8) :]
+        )
+        # 得到DataLoader
+        train_dataloader = DataLoader(train_data, bz, shuffle=True)
+        test_dataloader = DataLoader(test_data, bz, shuffle=True)
+        # 初始化模型
+        net.apply(self.init_net)
+        loss = nn.CrossEntropyLoss(reduction="none")
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+        # 进行训练
+        net.train()
+        loss_record = []
+        for epcho in range(epchos):
+            metric = [0.0, 0.0, 0.0]
+            start_time = time.time()
+            for iter in train_dataloader:
+                X, Y = iter[0], iter[1]
+                X = enc_tokenizer.encode_batch(X)
+                enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
+                Y = dec_tokenizer.encode_batch(Y)
+                Y_mask = torch.tensor([y.attention_mask for y in Y])
+                dec_valid = torch.tensor([sum(y) for y in Y_mask])
+                X = torch.tensor([x.ids for x in X])
+                Y = torch.tensor([y.ids for y in Y])
+                dec_output = net(X, Y, enc_valid, dec_valid)
+                loss_res = loss(dec_output.permute(0, 2, 1), Y)
+                loss_res = (loss_res * Y_mask).mean(dim=1).sum()
+                loss_res.backward()
+                grad_clipping(net, 1)
+                optimizer.step()
+                with torch.no_grad():
+                    metric[0] += loss_res
+                    metric[1] += dec_valid.sum()
+                    metric[2] += time.time() - start_time
+            loss_record.append(metric[0] / metric[1])
+            if (epcho + 1) % 10 == 0:
+                filename = "./datasets/net/transformer-" + str(epcho)
+                torch.save(net.state_dict(), filename)
+        print(f'loss {metric[0] / metric[1]:.3f}, {metric[1] / metric[2]:.1f} '
+          f'tokens/sec on {str(device)}')
+        torch.save(net.state_dict(), "./datasets/net/transformer-all_done")
+        # 计算BLEU分数
+        net.eval()
+        for iter in test_dataloader:
+            X, Y = iter[0], iter[1]
+            X = enc_tokenizer.encode_batch(X)
+            enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
+            Y = dec_tokenizer.encode_batch(Y)
+            Y_mask = torch.tensor([y.attention_mask for y in Y])
+            dec_valid = torch.tensor([sum(y) for y in Y_mask])
+            X = torch.tensor([x.ids for x in X])
+            Y = torch.tensor([y.ids for y in Y])
+            dec_output = net(X, Y, enc_valid, dec_valid)
+            loss_res = loss(dec_output.permute(0, 2, 1), Y)
+            loss_res = (loss_res * Y_mask).mean(dim=1)
 
     def predict():
         pass
 
+    def init_net(m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.zeros_(m.bias)
+        if isinstance(m, nn.Embedding):
+            nn.init.xavier_uniform_(m.weight)
 
-nn.CrossEntropyLoss()
+
+def grad_clipping(net, theta):
+    """Clip the gradient.
+
+    Defined in :numref:`sec_utils`"""
+    if isinstance(net, nn.Module):
+        params = [p for p in net.parameters() if p.requires_grad]
+    else:
+        params = net.params
+    norm = torch.sqrt(sum(torch.sum((p.grad**2)) for p in params))
+    if norm > theta:
+        for param in params:
+            param.grad[:] *= theta / norm
 
 
 class Transformer(nn.Module):
@@ -115,7 +204,7 @@ class TransformerEncoder(nn.Module):
             self.blks.add_module(str(i), EncodeLayer(dm, num_hidden, num_head, dropout))
 
     def forward(self, X, valid_lens):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         X = self.embedding(X) * math.sqrt(self.dm)
         X = self.pos_encoding(X)
         self.attention_weight = [None] * len(self.blks)
@@ -170,7 +259,7 @@ class PositionalEncoding(nn.Module):
         self.P[:, :, 1::2] = torch.cos(X)
 
     def forward(self, X):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         Y = X + self.P[:, : X.shape[1], :]
         return self.dropout(Y)
 
@@ -184,7 +273,7 @@ class EncodeLayer(nn.Module):
         self.resnorm2 = ResNorm(dm, dropout)
 
     def forward(self, X, valid_lens=None):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         Y = self.resnorm1(X, self.attention(X, X, X, valid_lens))
         return self.resnorm2(Y, self.ffn(Y))
 
@@ -201,7 +290,7 @@ class DecodeLayer(nn.Module):
         self.resnorm3 = ResNorm(dm, dropout)
 
     def forward(self, dec_input, enc_info):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         Q, KV, dec_valid = dec_input[0], dec_input[1], dec_input[2]
         enc_output, enc_valid = enc_info[0], enc_info[1]
         if KV[self.idx] is None:
@@ -225,7 +314,7 @@ class MultiHeadAttention(nn.Module):
         self.w_o = nn.Linear(v_dim, v_dim, bias=False)
 
     def forward(self, q, k, v, valid_lens=None):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         h_q = self.transpose_qkv(self.w_q(q))
         h_k = self.transpose_qkv(self.w_k(k))
         h_v = self.transpose_qkv(self.w_v(v))
@@ -259,7 +348,7 @@ class ResNorm(nn.Module):
         self.layernorm = nn.LayerNorm(dm)
 
     def forward(self, X, Y):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         # 先执行dropout，再执行残差连接
         Y = self.dropout(Y) + X
         # 再执行layernorm
@@ -274,7 +363,7 @@ class FFN(nn.Module):
         self.linear2 = nn.Linear(num_hidden, dm, bias=True)
 
     def forward(self, X):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         Y = self.linear1(X)
         Y = self.relu(Y)
         Y = self.linear2(Y)
@@ -294,7 +383,7 @@ class DotProductAttention(nn.Module):
         v: torch.Tensor,
         valid_lens=None,
     ):
-        print(self.__class__.__name__)
+        # print(self.__class__.__name__)
         # 总公式是 result = softmax(q*v_T/sqrt(dm))v,
         # 计算q*v_T/sqrt(dm),v_T是v的转置，这里的dm我选择的是k，其实q，k，v都一样
         scores = torch.bmm(q, k.permute(0, 2, 1)) / math.sqrt(k.shape[-1])
@@ -315,11 +404,3 @@ class DotProductAttention(nn.Module):
         self.weights = torch.softmax(scores, dim=-1)
         # 计算权值与v的乘积，权值要先执行dropout
         return torch.bmm(self.dropout(self.weights), v)
-
-
-class Concat(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-    def forward(self):
-        print(self.__class__.__name__)
