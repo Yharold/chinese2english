@@ -321,4 +321,16 @@ def test_train():
     c2e = Chinese2English()
     c2e.train(net, epchos, bz, vz, sz, lr, device)
 
-test_train()
+
+def test_text2num():
+    vz = 10000
+    sz = 128
+    X, Y, X_valid, Y_valid = text2num(vz, sz)
+    for i in range(3):
+        print(X[i])
+        print(X_valid[i])
+        print(Y[i])
+        print(Y_valid[i])
+
+
+test_text2num()

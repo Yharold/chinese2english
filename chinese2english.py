@@ -33,6 +33,18 @@ class CustomDataset(Dataset):
         return (self.feature[index], self.label[index])
 
 
+def custom_data():
+    # 读取原始数据
+    feature, label = read_data()
+    # 创建分词器
+    feature_tokenizer = someway()
+    label_tokenizer = someway()
+    # 将所有文本序列转为数字序列，得到数字序列的掩码
+    X, X_valid = someway()
+    Y, Y_valid = someway()
+    # 保存X,Y,X_valid,Y_valid
+
+
 def custom_tokenizer(
     data, vz, sz, language="english", special_tok=["[UNK]", "[BOS]", "[EOS]", "[PAD]"]
 ):
@@ -65,6 +77,39 @@ def custom_tokenizer(
     tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=sz)
     tokenizer.enable_truncation(max_length=sz)
     return tokenizer
+
+
+def someway():
+    pass
+
+
+def text2num(vocab_size, sz):
+    feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer(vocab_size, sz)
+    X = []
+    X_valid = []
+    Y = []
+    Y_valid = []
+    enc_tokenizer.no_padding()
+    enc_tokenizer.no_truncation()
+    dec_tokenizer.no_padding()
+    dec_tokenizer.no_truncation()
+    max_length = 0
+    for line in feature:
+        tmp = enc_tokenizer.encode(line)
+        X.append(tmp.ids)
+        X_valid.append(tmp.attention_mask)
+        if len(tmp.ids) > max_length:
+            max_length = len(tmp.ids)
+    print("feature max length:", max_length)
+    max_length = 0
+    for line in label:
+        tmp = dec_tokenizer.encode(line)
+        Y.append(tmp.ids)
+        Y_valid.append(tmp.attention_mask)
+        if len(tmp.ids) > max_length:
+            max_length = len(tmp.ids)
+    print("label max length:", max_length)
+    return X, Y, X_valid, Y_valid
 
 
 def load_tokenizer(vocab_size, sz):
