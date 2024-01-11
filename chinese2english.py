@@ -14,122 +14,112 @@ import json
 from IPython import display
 import os
 import time
+import torchviz
 
 
-class CustomDataset(Dataset):
-    def __init__(self, feature, label) -> None:
-        super().__init__()
-        if len(feature) == len(label):
-            self.feature = feature
-            self.label = label
-            self.length = len(feature)
-        else:
-            print("feature is not  equal to label")
-
-    def __len__(self):
-        return self.length
-
-    def __getitem__(self, index):
-        return (self.feature[index], self.label[index])
-
-
-def custom_data():
+def custom_data(
+    feature_vocab_size,
+    label_vocab_size,
+    feature_seq_size,
+    label_seq_size,
+    feature_filename="feature_tokenizer",
+    label_filname="label_tokenizer",
+    XY_filename="XY.pt",
+):
     # 读取原始数据
     feature, label = read_data()
     # 创建分词器
-    feature_tokenizer = someway()
-    label_tokenizer = someway()
-    # 将所有文本序列转为数字序列，得到数字序列的掩码
-    X, X_valid = someway()
-    Y, Y_valid = someway()
-    # 保存X,Y,X_valid,Y_valid
-
-
-def custom_tokenizer(
-    data, vz, sz, language="english", special_tok=["[UNK]", "[BOS]", "[EOS]", "[PAD]"]
-):
-    tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
-    tokenizer.normalizer = normalizers.Sequence(
-        [normalizers.NFD(), normalizers.Lowercase(), normalizers.StripAccents()]
+    feature_tokenizer = custom_tokenizer(
+        feature, feature_vocab_size, feature_seq_size, feature_filename
     )
-    if language == "chinese":
-        tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Metaspace()
+    label_tokenizer = custom_tokenizer(
+        label, label_vocab_size, label_seq_size, label_filname
+    )
+    # 将所有文本序列转为数字序列，得到数字序列和掩码
+    XY_filepath = "datasets/" + XY_filename
+    # 如果已经计算过并保存为文件，那直接从文件读取，否则重新计算
+    if XY_filename not in os.listdir("datasets"):
+        X, X_valid, X_mask = text_seq2num_seq(feature, feature_tokenizer)
+        Y, Y_valid, Y_mask = text_seq2num_seq(label, label_tokenizer)
+        torch.save([X, X_valid, X_mask, Y, Y_valid, Y_mask], XY_filepath)
     else:
-        tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
+        X, X_valid, X_mask, Y, Y_valid, Y_mask = torch.load(XY_filepath)
+    return X, X_valid, X_mask, Y, Y_valid, Y_mask
 
-    trainer = BpeTrainer(
-        vocab_size=vz,
-        special_tokens=special_tok,
+
+def custom_train_test_data():
+    XY_filepath = "datasets/XY.pt"
+    X, X_valid, X_mask, Y, Y_valid, Y_mask = torch.load(XY_filepath)
+    length = X.shape[0]
+    print(length)
+    i = int(length * 0.8)
+    print(i)
+    train_X, train_X_valid, train_X_mask, train_Y, train_Y_valid, train_Y_mask = (
+        X[0:i],
+        X_valid[0:i],
+        X_mask[0:i],
+        Y[0:i],
+        Y_valid[0:i],
+        Y_mask[0:i],
     )
-    tokenizer.decoder = BPEDecoder()
-    tokenizer.post_processor = TemplateProcessing(
-        single="[BOS] $A [EOS]",
-        special_tokens=[
-            ("[BOS]", 1),
-            ("[EOS]", 2),
-            ("[PAD]", 3),
-        ],
+    torch.save(
+        [train_X, train_X_valid, train_X_mask, train_Y, train_Y_valid, train_Y_mask],
+        "datasets/train_XY.pt",
     )
-    if type(data) == "str":
-        tokenizer.train(data)
-    if hasattr(data, "__iter__"):
-        tokenizer.train_from_iterator(data, trainer)
-    tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=sz)
-    tokenizer.enable_truncation(max_length=sz)
+    test_X, test_X_valid, test_X_mask, test_Y, test_Y_valid, test_Y_mask = (
+        X[i:],
+        X_valid[i:],
+        X_mask[i:],
+        Y[i:],
+        Y_valid[i:],
+        Y_mask[i:],
+    )
+    torch.save(
+        [test_X, test_X_valid, test_X_mask, test_Y, test_Y_valid, test_Y_mask],
+        "datasets/test_XY.pt",
+    )
+    print(train_X.shape[0])
+    print(test_X.shape[0])
+
+
+def custom_tokenizer(data, vocab_size, seq_size, filename):
+    file_path = "datasets/" + filename
+    if filename not in os.listdir("datasets"):
+        special_tokens = ["[UNK]", "[BOS]", "[EOS]", "[PAD]"]
+        tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+        tokenizer.normalizer = normalizers.Sequence(
+            [normalizers.NFD(), normalizers.Lowercase(), normalizers.StripAccents()]
+        )
+        tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
+        feature_trainer = BpeTrainer(
+            vocab_size=vocab_size, special_tokens=special_tokens
+        )
+        tokenizer.decoder = BPEDecoder()
+        tokenizer.enable_padding(pad_id=3, pad_token="[PAD]", length=seq_size)
+        tokenizer.enable_truncation(max_length=seq_size)
+        tokenizer.post_processor = TemplateProcessing(
+            single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)]
+        )
+        tokenizer.train_from_iterator(data, feature_trainer)
+        tokenizer.save(file_path)
+    else:
+        tokenizer = Tokenizer.from_file(file_path)
     return tokenizer
 
 
-def someway():
-    pass
-
-
-def text2num(vocab_size, sz):
-    feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer(vocab_size, sz)
+def text_seq2num_seq(data, tokenizer: Tokenizer):
     X = []
     X_valid = []
-    Y = []
-    Y_valid = []
-    enc_tokenizer.no_padding()
-    enc_tokenizer.no_truncation()
-    dec_tokenizer.no_padding()
-    dec_tokenizer.no_truncation()
-    max_length = 0
-    for line in feature:
-        tmp = enc_tokenizer.encode(line)
+    X_mask = []
+    for iter in data:
+        tmp = tokenizer.encode(iter)
         X.append(tmp.ids)
-        X_valid.append(tmp.attention_mask)
-        if len(tmp.ids) > max_length:
-            max_length = len(tmp.ids)
-    print("feature max length:", max_length)
-    max_length = 0
-    for line in label:
-        tmp = dec_tokenizer.encode(line)
-        Y.append(tmp.ids)
-        Y_valid.append(tmp.attention_mask)
-        if len(tmp.ids) > max_length:
-            max_length = len(tmp.ids)
-    print("label max length:", max_length)
-    return X, Y, X_valid, Y_valid
+        X_mask.append(tmp.attention_mask)
+        X_valid.append(sum(tmp.attention_mask))
+    return torch.tensor(X), torch.tensor(X_valid), torch.tensor(X_mask)
 
 
-def load_tokenizer(vocab_size, sz):
-    feature, label = read_data()
-    if "enc_tokenizer.json" in os.listdir("./datasets"):
-        enc_tokenizer = Tokenizer.from_file(".\datasets\enc_tokenizer.json")
-    else:
-        print("train enc_tokenizer")
-        enc_tokenizer = custom_tokenizer(feature, vocab_size, sz, language="chinese")
-        enc_tokenizer.save(".\datasets\enc_tokenizer.json")
-    if "dec_tokenizer.json" in os.listdir("./datasets"):
-        dec_tokenizer = Tokenizer.from_file(".\datasets\dec_tokenizer.json")
-    else:
-        print("train dec_tokenizer")
-        dec_tokenizer = custom_tokenizer(label, vocab_size, sz, language="english")
-        dec_tokenizer.save(".\datasets\dec_tokenizer.json")
-    return feature, label, enc_tokenizer, dec_tokenizer
-
-
-def read_data(filepath="datasets\\translation2019zh_valid.json"):
+def read_data(filepath="datasets/translation2019zh_valid.json"):
     with open(filepath, "r", encoding="utf-8") as f:
         data = [json.loads(line.strip()) for line in f.readlines()]
     chinese_data = []
@@ -140,105 +130,78 @@ def read_data(filepath="datasets\\translation2019zh_valid.json"):
     return chinese_data, english_data
 
 
+def init_model(m):
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    if isinstance(m, nn.Embedding):
+        nn.init.xavier_uniform_(m.weight)
+
+
+class CustomDataset(Dataset):
+    def __init__(self, X, X_valid, X_mask, Y, Y_valid, Y_mask) -> None:
+        super().__init__()
+        self.length = X.shape[0]
+        self.X = X
+        self.Y = Y
+        self.X_valid = X_valid
+        self.Y_valid = Y_valid
+        self.X_mask = X_mask
+        self.Y_mask = Y_mask
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return (
+            self.X[index],
+            self.X_valid[index],
+            self.X_mask[index],
+            self.Y[index],
+            self.Y_valid[index],
+            self.Y_mask[index],
+        )
+
+
 class Chinese2English:
     def __init__(self) -> None:
         pass
 
-    # def train(self, net, epchos, bz, vz, sz, lr, device="cpu"):
-    #     torch.autograd.set_detect_anomaly(True)
-    #     # 处理数据，得到词表。这里应该分为中文词表和英文词表
-    #     feature, label, enc_tokenizer, dec_tokenizer = load_tokenizer(vz, sz)
-    #     # 将数据分为训练集和测试集
-    #     data_size = len(feature)
-    #     train_data = CustomDataset(
-    #         feature[0 : int(data_size * 0.8)], label[0 : int(data_size * 0.8)]
-    #     )
-    #     test_data = CustomDataset(
-    #         feature[int(data_size * 0.8) :], label[int(data_size * 0.8) :]
-    #     )
-    #     # 得到DataLoader
-    #     train_dataloader = DataLoader(train_data, bz, shuffle=True)
-    #     test_dataloader = DataLoader(test_data, bz, shuffle=True)
-
-    #     # 初始化模型
-    #     def init_net(m):
-    #         if isinstance(m, nn.Linear):
-    #             nn.init.xavier_uniform_(m.weight)
-    #             if m.bias is not None:
-    #                 nn.init.zeros_(m.bias)
-    #         if isinstance(m, nn.Embedding):
-    #             nn.init.xavier_uniform_(m.weight)
-
-    #     net.apply(init_net)
-    #     loss = CustomLoss()
-    #     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-    #     # 进行训练
-    #     net.train()
-    #     loss_record = []
-    #     for epcho in range(epchos):
-    #         metric = [0.0, 0.0, 0.0]
-    #         start_time = time.time()
-    #         for iter in train_dataloader:
-    #             X, Y = iter[0], iter[1]
-    #             X = enc_tokenizer.encode_batch(X)
-    #             enc_valid = torch.tensor([sum(x.attention_mask) for x in X])
-    #             Y = dec_tokenizer.encode_batch(Y)
-    #             Y_mask = torch.tensor([y.attention_mask for y in Y])
-    #             dec_valid = torch.tensor([sum(y) for y in Y_mask])
-    #             X = torch.tensor([x.ids for x in X])
-    #             Y = torch.tensor([y.ids for y in Y])
-    #             dec_output = net(X, Y, enc_valid, dec_valid)
-    #             l = loss(dec_output, Y, Y_mask)
-    #             # 清零梯度
-    #             optimizer.zero_grad()
-    #             # 计算梯度
-    #             l.backward()
-    #             # grad_clipping(net, 1)
-    #             # 更新梯度
-    #             optimizer.step()
-    #             torch.cuda.empty_cache()
-    #             with torch.no_grad():
-    #                 metric[0] += l
-    #                 metric[1] += dec_valid.sum()
-    #                 metric[2] += time.time() - start_time
-    #             loss_record.append(metric[0] / metric[1])
-    #             print(loss_record[-1])
-    #         if (epcho + 1) % 10 == 0:
-    #             filename = "./datasets/net/transformer-" + str(epcho)
-    #             torch.save(net.state_dict(), filename)
-    #     print(
-    #         f"loss {loss_record[epcho]:.3f}, {metric[1] / metric[2]:.1f} "
-    #         f"tokens/sec on {str(device)}"
-    #     )
-    #     torch.save(net.state_dict(), "./datasets/net/transformer-all_done")
-
     # 输入模型，处理好的包含了feture,label的dataloader,num_epochs,lr
-    def train(model: nn.Module, dataloader: DataLoader, num_epochs, lr):
-        def init_model(m):
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            if isinstance(m, nn.Embedding):
-                nn.init.xavier_uniform_(m.weight)
-
+    def train(self, model: nn.Module, dataloader: DataLoader, num_epochs, lr, device):
         model.apply(init_model)
+        model.to(device)
         loss = CustomLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        model.train()
+
         for epoch in range(num_epochs):
+            scores = [0.0, 0.0, 0.0]
+            start = time.time()
             for iter in dataloader:
-                X, Y, X_valid, Y_valid, Y_mask = (
-                    iter[0],
-                    iter[1],
-                    iter[2],
-                    iter[3],
-                    iter[4],
-                )
+                X, X_valid, _, Y, Y_valid, Y_mask = [x.to(device) for x in iter]
                 pred = model(X, Y, X_valid, Y_valid)
                 l = loss(pred, Y, Y_mask)
+                MyConvNetVis = torchviz.make_dot(
+                    l,
+                    params=dict(model.named_parameters()),
+                )
+                MyConvNetVis.format = "png"
+                # 指定文件生成的文件夹
+                MyConvNetVis.directory = "./"
+                # 生成文件
+                MyConvNetVis.view()
                 optimizer.zero_grad()
                 l.backward()
                 optimizer.step()
+
+                with torch.no_grad():
+                    scores[0] += l.item()
+                    scores[1] += Y_valid.sum().item()
+                    scores[2] = scores[1] / (time.time() - start)
+            print(f"{scores[2]:.3f}token/second")
+            print("loss:", scores[0] / scores[1])
 
     def predict():
         pass
@@ -289,13 +252,13 @@ class TransformerEncoder(nn.Module):
         for i in range(num_layer):
             self.blks.add_module(str(i), EncodeLayer(dm, num_hidden, num_head, dropout))
 
-    def forward(self, X, valid_lens):
+    def forward(self, X, mask):
         # print(self.__class__.__name__)
         X = self.embedding(X) * math.sqrt(self.dm)
         X = self.pos_encoding(X)
         self.attention_weight = [None] * len(self.blks)
         for i, blk in enumerate(self.blks):
-            X = blk(X, valid_lens)
+            X = blk(X, mask)
             self.attention_weight[i] = blk.attention.attention.weights
         return X
 
@@ -317,14 +280,12 @@ class TransformerDecoder(nn.Module):
         self.key_value = [None] * num_layer
         self.weights = [[None] * num_layer] * 2
 
-    def forward(self, X, dec_valid, enc_output, enc_valid):
+    def forward(self, X, enc_output, enc_mask):
+        if self.training:
+            dec_mask = torch.eye()
         X = self.pos_encoding(self.embedding(X) * math.sqrt(self.dm))
-        if dec_valid is not None and dec_valid.dim() == 1:
-            bz, sz, _ = X.shape
-            dec_valid = torch.repeat_interleave(dec_valid, sz).reshape(bz, -1)
-            dec_valid = torch.min(dec_valid, torch.arange(1, sz + 1).repeat(bz, 1))
-        enc_info = (enc_output, enc_valid)
-        dec_input = (X, self.key_value, dec_valid)
+        enc_info = (enc_output, enc_mask)
+        dec_input = (X, self.key_value, dec_mask)
         for i, blk in enumerate(self.blks):
             dec_input, enc_info = blk(dec_input, enc_info)
             self.weights[0][i] = blk.attention1.attention.weights
@@ -336,18 +297,18 @@ class PositionalEncoding(nn.Module):
     def __init__(self, dm, dropout, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.dropout = nn.Dropout(dropout)
-        max_len = 1000
-        self.P = torch.zeros((1, max_len, dm))
-        i = torch.arange(max_len, dtype=torch.float32).reshape(-1, 1)
-        j = torch.arange(0, dm, 2, dtype=torch.float32)
-        X = i / torch.pow(10000, j / dm)
-        self.P[:, :, 0::2] = torch.sin(X)
-        self.P[:, :, 1::2] = torch.cos(X)
+        self.dm = dm
 
-    def forward(self, X):
+    def forward(self, X: Tensor):
         # print(self.__class__.__name__)
-        Y = X + self.P[:, : X.shape[1], :]
-        return self.dropout(Y)
+        max_len = 1000
+        self.P = torch.zeros((1, max_len, self.dm), device=X.device)
+        i = torch.arange(max_len, dtype=torch.float32, device=X.device).reshape(-1, 1)
+        j = torch.arange(0, self.dm, 2, dtype=torch.float32, device=X.device)
+        tmp = i / torch.pow(10000, j / self.dm)
+        self.P[:, :, 0::2] = torch.sin(tmp)
+        self.P[:, :, 1::2] = torch.cos(tmp)
+        return self.dropout(X + self.P[:, : X.shape[1], :])
 
 
 class EncodeLayer(nn.Module):
@@ -358,9 +319,9 @@ class EncodeLayer(nn.Module):
         self.ffn = FFN(dm, num_hidden)
         self.resnorm2 = ResNorm(dm, dropout)
 
-    def forward(self, X, valid_lens=None):
+    def forward(self, X, mask=None):
         # print(self.__class__.__name__)
-        Y = self.resnorm1(X, self.attention(X, X, X, valid_lens))
+        Y = self.resnorm1(X, self.attention(X, X, X, mask))
         return self.resnorm2(Y, self.ffn(Y))
 
 
@@ -377,16 +338,16 @@ class DecodeLayer(nn.Module):
 
     def forward(self, dec_input, enc_info):
         # print(self.__class__.__name__)
-        Q, KV, dec_valid = dec_input[0], dec_input[1], dec_input[2]
-        enc_output, enc_valid = enc_info[0], enc_info[1]
+        Q, KV, dec_mask = dec_input[0], dec_input[1], dec_input[2]
+        enc_output, enc_mask = enc_info[0], enc_info[1]
         if KV[self.idx] is None:
             KV[self.idx] = Q
         else:
             KV[self.idx] = torch.cat((KV[self.idx], Q), dim=1)
-        Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_valid))
-        Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
+        Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_mask))
+        Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_mask))
         Y3 = self.resnorm3(Y2, self.ffn(Y2))
-        return (Y3, KV, dec_valid), enc_info
+        return (Y3, KV, dec_mask), enc_info
 
 
 class MultiHeadAttention(nn.Module):
@@ -399,15 +360,20 @@ class MultiHeadAttention(nn.Module):
         self.attention = DotProductAttention(dropout)
         self.w_o = nn.Linear(v_dim, v_dim, bias=False)
 
-    def forward(self, q, k, v, valid_lens=None):
+    def forward(self, q, k, v, mask=None):
         # print(self.__class__.__name__)
+        # h_q等大小是(bz*num_head,sz,dm/num_head),mask大小(bz,sz)
         h_q = self.transpose_qkv(self.w_q(q))
         h_k = self.transpose_qkv(self.w_k(k))
         h_v = self.transpose_qkv(self.w_v(v))
-        # h_q等大小是(bz*num_head,sz,dm/num_head),所以valid_lens也要同步扩大
-        if valid_lens is not None:
-            valid_lens = torch.repeat_interleave(valid_lens, self.num_head, dim=0)
-        output = self.attention(h_q, h_k, h_v, valid_lens)
+        # 所以mask也要同步扩大
+        if mask is not None:
+            new_mask = (
+                mask.unsqueeze(1)
+                .expand(-1, self.num_head, -1)
+                .reshape(-1, mask.shape[1])
+            )
+        output = self.attention(h_q, h_k, h_v, new_mask)
         output_concat = self.transpose_output(output)
         return self.w_o(output_concat)
 
@@ -422,9 +388,8 @@ class MultiHeadAttention(nn.Module):
 
     # 输入x:(bz*num_head,sz,dm/num_head),输出:(bz,sz,dm)
     def transpose_output(self, x: torch.Tensor):
-        x = x.reshape(-1, self.num_head, x.shape[1], x.shape[2])
-        x = x.permute(0, 2, 1, 3)
-        return x.reshape(x.shape[0], x.shape[1], -1)
+        y = x.reshape(-1, self.num_head, x.shape[1], x.shape[2]).permute(0, 2, 1, 3)
+        return y.reshape(y.shape[0], y.shape[1], -1)
 
 
 class ResNorm(nn.Module):
@@ -436,9 +401,8 @@ class ResNorm(nn.Module):
     def forward(self, X, Y):
         # print(self.__class__.__name__)
         # 先执行dropout，再执行残差连接
-        Y = self.dropout(Y) + X
         # 再执行layernorm
-        return self.layernorm(Y)
+        return self.layernorm(self.dropout(Y) + X)
 
 
 class FFN(nn.Module):
@@ -450,10 +414,7 @@ class FFN(nn.Module):
 
     def forward(self, X):
         # print(self.__class__.__name__)
-        Y = self.linear1(X)
-        Y = self.relu(Y)
-        Y = self.linear2(Y)
-        return Y
+        return self.linear2(self.relu(self.linear1(X)))
 
 
 class DotProductAttention(nn.Module):
@@ -467,26 +428,20 @@ class DotProductAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        valid_lens=None,
+        mask=None,
     ):
         # print(self.__class__.__name__)
         # 总公式是 result = softmax(q*v_T/sqrt(dm))v,
         # 计算q*v_T/sqrt(dm),v_T是v的转置，这里的dm我选择的是k，其实q，k，v都一样
         scores = torch.bmm(q, k.permute(0, 2, 1)) / math.sqrt(k.shape[-1])
-        # 计算掩码并进行掩码操作
-        if valid_lens is not None:
+        # 计算掩码并进行掩码操作,mask(bz,sz)
+        if mask is not None:
             # 编码器输入和输出的有效长度valid_len是维度为1的张量，大小是bz
-            if valid_lens.dim() == 1:
-                valid_lens = valid_lens.reshape(scores.shape[0], 1, 1)
-            # 解码器的输入有效长度valid_len是维度为2的张量，大小是(bz,sz)
-            else:
-                valid_lens = valid_lens.reshape(scores.shape[0], scores.shape[1], -1)
-            mask = torch.arange(scores.shape[-1], dtype=torch.int16).expand(
-                scores.shape
-            )
-            mask = mask >= valid_lens
-            scores = torch.masked_fill(scores, mask, 1e-6)
-        # 在最后一个维度执行softmax函数，得到的就是我们所说的注意力权重
-        self.weights = torch.softmax(scores, dim=-1)
+            new_mask = mask.unsqueeze(1).expand(-1, mask.shape[1], -1)
+            mask_scores = torch.where(new_mask == 0, 1e-6, scores)
+            # 在最后一个维度执行softmax函数，得到的就是我们所说的注意力权重
+            self.weights = torch.softmax(mask_scores, dim=-1)
+        else:
+            self.weights = torch.softmax(scores, dim=-1)
         # 计算权值与v的乘积，权值要先执行dropout
         return torch.bmm(self.dropout(self.weights), v)
