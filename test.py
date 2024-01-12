@@ -5,31 +5,26 @@ from d2l import torch as d2l
 
 def test_DotProductAttention():
     bz = 2
-    sz = 3
-    dm = 4
+    sz = 10
+    dm = 16
     dropout = 0.01
     q = torch.rand((bz, sz, dm))
     k = torch.rand((bz, sz, dm))
     v = torch.rand((bz, sz, dm))
-    mask = []
-    for i in range(bz):
-        n = int(torch.randint(1, sz, (1, 1)).item())
-        tmp = []
-        for j in range(sz):
-            if j < n:
-                tmp.append(1)
-            else:
-                tmp.append(0)
-        mask.append(tmp)
-    mask = torch.tensor(mask)
-    print(mask)
+    # valid = [torch.randint(0, sz, (1, 1)).item() for x in range(bz)]
+    # print(valid)
+    # valid = torch.repeat_interleave(torch.tensor(valid), sz).reshape(bz, -1)
+    valid = torch.arange(1, sz + 1).expand(bz, sz)
     dpa = DotProductAttention(dropout)
-    result = dpa(q, k, v, mask)
+    result = dpa(q, k, v, valid)
     print(q)
     print(k)
     print(v)
     print(result)
     print(result.shape)
+
+
+# test_DotProductAttention()
 
 
 def test_MultiHeadAttention():
@@ -109,4 +104,36 @@ def test_TransformerEncoder():
         optimizer.step()
 
 
-test_TransformerEncoder()
+def test_expand():
+    # q = torch.rand((2, 3, 4))
+    # valid = torch.arange(0, 3)
+    # print(valid)
+    # print(valid.shape)
+    # # 等价于先unsqueeze再repeat
+    # valid = valid.expand(2, 3).unsqueeze(2)
+    # print(valid.shape)
+    # # valid = valid.repeat(2, 1)
+    # # print(valid.shape)
+    # print(valid)
+    # mask = torch.arange(0, q.shape[1]).expand((2, q.shape[1], q.shape[1]))
+    # print(mask)
+    # mask = mask > valid
+    # print(mask)\
+    bz = 4
+    sz = 10
+    num_head = 4
+    # valid = torch.arange(1, sz + 1).expand(bz, sz)
+    # valid = [torch.randint(0, sz, (1, 1)).item() for x in range(bz)]
+    # print(valid)
+    # valid = torch.repeat_interleave(torch.tensor(valid), sz).reshape(bz, -1)
+    # print(valid)
+    # valid = valid.unsqueeze(1).expand(bz, num_head, sz).reshape(-1, sz)
+    # print(valid)
+    a = torch.tensor([3, 4, 5])
+    b = a.expand(2, 3)
+    print(b)
+    c = b.unsqueeze(2).expand(2, 3, 3)
+    print(c)
+
+
+test_expand()

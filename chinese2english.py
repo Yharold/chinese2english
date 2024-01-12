@@ -14,7 +14,6 @@ import json
 from IPython import display
 import os
 import time
-import torchviz
 
 
 def custom_data(
@@ -237,7 +236,10 @@ class Transformer(nn.Module):
 
     def forward(self, X, Y, enc_valid, dec_valid):
         enc_output = self.encoder(X, enc_valid)
-        return self.decoder(Y, dec_valid, enc_output, enc_valid)
+        key_value = [None] * self.decoder.num_layer
+        dec_input = (Y, key_value, dec_valid)
+        enc_info = (enc_output, enc_valid)
+        return self.decoder(dec_input, enc_info)
 
 
 class TransformerEncoder(nn.Module):
@@ -252,13 +254,15 @@ class TransformerEncoder(nn.Module):
         for i in range(num_layer):
             self.blks.add_module(str(i), EncodeLayer(dm, num_hidden, num_head, dropout))
 
-    def forward(self, X, mask):
+    def forward(self, X, valid):
         # print(self.__class__.__name__)
+        if valid.dim() == 1:
+            valid = valid.expand(X.shape[0], X.shape[1])
         X = self.embedding(X) * math.sqrt(self.dm)
         X = self.pos_encoding(X)
         self.attention_weight = [None] * len(self.blks)
         for i, blk in enumerate(self.blks):
-            X = blk(X, mask)
+            X = blk(X, valid)
             self.attention_weight[i] = blk.attention.attention.weights
         return X
 
@@ -269,6 +273,7 @@ class TransformerDecoder(nn.Module):
     ) -> None:
         super().__init__(*args, **kwargs)
         self.dm = dm
+        self.num_layer = num_layer
         self.embedding = nn.Embedding(voca_size, dm)
         self.pos_encoding = PositionalEncoding(dm, dropout)
         self.blks = nn.Sequential()
@@ -277,20 +282,26 @@ class TransformerDecoder(nn.Module):
                 str(i), DecodeLayer(i, dm, num_hidden, num_head, dropout)
             )
         self.linear = nn.Linear(dm, voca_size)
-        self.key_value = [None] * num_layer
         self.weights = [[None] * num_layer] * 2
 
-    def forward(self, X, enc_output, enc_mask):
-        if self.training:
-            dec_mask = torch.eye()
+    def forward(self, dec_input, enc_info):
+        X, key_value, dec_valid = dec_input
+        # if self.training:
+        #     dec_valid = torch.arange(1, X.shape[1] + 1, device=X.device).expand(
+        #         X.shape[0], X.shape[1]
+        #     )
+        # else:
+        #     dec_valid = None
+        # if enc_valid.dim() == 1:
+        #     enc_valid = enc_valid.expand(enc_output.shape[0], enc_output.shape[1])
         X = self.pos_encoding(self.embedding(X) * math.sqrt(self.dm))
-        enc_info = (enc_output, enc_mask)
-        dec_input = (X, self.key_value, dec_mask)
+        dec_input = (X, key_value, dec_valid)
         for i, blk in enumerate(self.blks):
             dec_input, enc_info = blk(dec_input, enc_info)
             self.weights[0][i] = blk.attention1.attention.weights
             self.weights[1][i] = blk.attention2.attention.weights
-        return self.linear(dec_input[0])
+        Y = self.linear(dec_input[0])
+        return (Y, key_value, dec_valid)
 
 
 class PositionalEncoding(nn.Module):
@@ -319,9 +330,9 @@ class EncodeLayer(nn.Module):
         self.ffn = FFN(dm, num_hidden)
         self.resnorm2 = ResNorm(dm, dropout)
 
-    def forward(self, X, mask=None):
+    def forward(self, X, valid=None):
         # print(self.__class__.__name__)
-        Y = self.resnorm1(X, self.attention(X, X, X, mask))
+        Y = self.resnorm1(X, self.attention(X, X, X, valid))
         return self.resnorm2(Y, self.ffn(Y))
 
 
@@ -338,16 +349,16 @@ class DecodeLayer(nn.Module):
 
     def forward(self, dec_input, enc_info):
         # print(self.__class__.__name__)
-        Q, KV, dec_mask = dec_input[0], dec_input[1], dec_input[2]
-        enc_output, enc_mask = enc_info[0], enc_info[1]
+        Q, KV, dec_valid = dec_input[0], dec_input[1], dec_input[2]
+        enc_output, enc_valid = enc_info[0], enc_info[1]
         if KV[self.idx] is None:
             KV[self.idx] = Q
         else:
             KV[self.idx] = torch.cat((KV[self.idx], Q), dim=1)
-        Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_mask))
-        Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_mask))
+        Y = self.resnorm1(Q, self.attention1(Q, KV[self.idx], KV[self.idx], dec_valid))
+        Y2 = self.resnorm2(Y, self.attention2(Y, enc_output, enc_output, enc_valid))
         Y3 = self.resnorm3(Y2, self.ffn(Y2))
-        return (Y3, KV, dec_mask), enc_info
+        return (Y3, KV, dec_valid), enc_info
 
 
 class MultiHeadAttention(nn.Module):
@@ -360,20 +371,20 @@ class MultiHeadAttention(nn.Module):
         self.attention = DotProductAttention(dropout)
         self.w_o = nn.Linear(v_dim, v_dim, bias=False)
 
-    def forward(self, q, k, v, mask=None):
+    def forward(self, q, k, v, valid):
         # print(self.__class__.__name__)
-        # h_q等大小是(bz*num_head,sz,dm/num_head),mask大小(bz,sz)
+        # h_q等大小是(bz*num_head,sz,dm/num_head),valid大小(bz,sz)
         h_q = self.transpose_qkv(self.w_q(q))
         h_k = self.transpose_qkv(self.w_k(k))
         h_v = self.transpose_qkv(self.w_v(v))
-        # 所以mask也要同步扩大
-        if mask is not None:
-            new_mask = (
-                mask.unsqueeze(1)
-                .expand(-1, self.num_head, -1)
-                .reshape(-1, mask.shape[1])
+        # 所以valid也要同步扩大
+        if valid is not None:
+            new_valid = (
+                valid.unsqueeze(1)
+                .expand(q.shape[0], self.num_head, q.shape[1])
+                .reshape(-1, q.shape[1])
             )
-        output = self.attention(h_q, h_k, h_v, new_mask)
+        output = self.attention(h_q, h_k, h_v, new_valid)
         output_concat = self.transpose_output(output)
         return self.w_o(output_concat)
 
@@ -428,17 +439,18 @@ class DotProductAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        mask=None,
+        valid,
     ):
         # print(self.__class__.__name__)
         # 总公式是 result = softmax(q*v_T/sqrt(dm))v,
         # 计算q*v_T/sqrt(dm),v_T是v的转置，这里的dm我选择的是k，其实q，k，v都一样
         scores = torch.bmm(q, k.permute(0, 2, 1)) / math.sqrt(k.shape[-1])
-        # 计算掩码并进行掩码操作,mask(bz,sz)
-        if mask is not None:
-            # 编码器输入和输出的有效长度valid_len是维度为1的张量，大小是bz
-            new_mask = mask.unsqueeze(1).expand(-1, mask.shape[1], -1)
-            mask_scores = torch.where(new_mask == 0, 1e-6, scores)
+        # 计算掩码并进行掩码操作,valid:(bz,sz)
+        if valid is not None:
+            mask = torch.arange(1, q.shape[1] + 1).expand(
+                (q.shape[0], q.shape[1], q.shape[1])
+            ) > valid.unsqueeze(2)
+            mask_scores = torch.masked_fill(scores, mask, 1e-6)
             # 在最后一个维度执行softmax函数，得到的就是我们所说的注意力权重
             self.weights = torch.softmax(mask_scores, dim=-1)
         else:
