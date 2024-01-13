@@ -1,5 +1,5 @@
 import math
-from typing import Optional
+import random
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import Tensor, nn
@@ -43,7 +43,7 @@ def custom_data(
         torch.save([X, X_valid, X_mask, Y, Y_valid, Y_mask], XY_filepath)
     else:
         X, X_valid, X_mask, Y, Y_valid, Y_mask = torch.load(XY_filepath)
-    return X, X_valid, X_mask, Y, Y_valid, Y_mask
+    return X, X_valid, X_mask, Y, Y_valid, Y_mask, feature, label
 
 
 def custom_train_test_data():
@@ -77,8 +77,6 @@ def custom_train_test_data():
         [test_X, test_X_valid, test_X_mask, test_Y, test_Y_valid, test_Y_mask],
         "datasets/test_XY.pt",
     )
-    print(train_X.shape[0])
-    print(test_X.shape[0])
 
 
 def custom_tokenizer(data, vocab_size, seq_size, filename):
@@ -114,7 +112,7 @@ def text_seq2num_seq(data, tokenizer: Tokenizer):
         tmp = tokenizer.encode(iter)
         X.append(tmp.ids)
         X_mask.append(tmp.attention_mask)
-        X_valid.append(sum(tmp.attention_mask))
+        X_valid.append([sum(tmp.attention_mask) for _ in range(len(tmp.ids))])
     return torch.tensor(X), torch.tensor(X_valid), torch.tensor(X_mask)
 
 
@@ -174,35 +172,41 @@ class Chinese2English:
         loss = CustomLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         model.train()
-
+        each_scores = []
+        all_time = 0.0
         for epoch in range(num_epochs):
             scores = [0.0, 0.0, 0.0]
             start = time.time()
             for iter in dataloader:
-                X, X_valid, _, Y, Y_valid, Y_mask = [x.to(device) for x in iter]
-                pred = model(X, Y, X_valid, Y_valid)
+                # 大小应该都是(bz,sz)
+                X, X_valid, _, Y, _, Y_mask = [x.to(device) for x in iter]
+                Y_valid = torch.arange(1, Y.shape[1] + 1, device=device).expand(Y.shape)
+                pred, _ = model(X, Y, X_valid, Y_valid)
                 l = loss(pred, Y, Y_mask)
-                MyConvNetVis = torchviz.make_dot(
-                    l,
-                    params=dict(model.named_parameters()),
-                )
-                MyConvNetVis.format = "png"
-                # 指定文件生成的文件夹
-                MyConvNetVis.directory = "./"
-                # 生成文件
-                MyConvNetVis.view()
                 optimizer.zero_grad()
                 l.backward()
+                grad_clipping(model, 1)
                 optimizer.step()
-
                 with torch.no_grad():
                     scores[0] += l.item()
-                    scores[1] += Y_valid.sum().item()
+                    scores[1] += Y_mask.sum().sum().item()
                     scores[2] = scores[1] / (time.time() - start)
-            print(f"{scores[2]:.3f}token/second")
-            print("loss:", scores[0] / scores[1])
+        each_scores.append(scores[0] / scores[1])
+        all_time += time.time() - start
+        if (epoch + 1) % 10 == 0:
+            torch.save(model.state_dict(), "datasets/model/model_" + str(epoch) + ".pt")
+            torch.save(each_scores, "datasets/scroes.pt")
+            print(
+                epoch + 1,
+                f"loss:, {each_scores[-1]:.3f}, {scores[2]:.3f}token/second on {device}",
+                f"processing time: {all_time} second",
+                f"{(epoch+1)/num_epochs*100:.1f}%,"
+                f"predict to need for {all_time*(num_epochs/(epoch+1)-1):.1f}",
+            )
+        torch.save(model.state_dict(), "datasets/model/model_all.pt")
+        torch.save(each_scores, "datasets/scroes.pt")
 
-    def predict():
+    def predict(model: nn.Module, dataloader: DataLoader):
         pass
 
 
@@ -210,7 +214,10 @@ class CustomLoss(nn.CrossEntropyLoss):
     def forward(self, pred: torch.Tensor, label: torch.Tensor, Y_mask: torch.Tensor):
         self.reduction = "none"
         unweighted_loss = super(CustomLoss, self).forward(pred.permute(0, 2, 1), label)
-        weighted_loss = (unweighted_loss * Y_mask).mean(dim=1).sum()
+        # weighted_loss = (unweighted_loss * Y_mask).mean(dim=1).sum()
+        weighted_loss = (
+            (unweighted_loss * Y_mask).sum(dim=1) / (Y_mask.sum(dim=1))
+        ).sum()
         return weighted_loss
 
 
@@ -286,14 +293,6 @@ class TransformerDecoder(nn.Module):
 
     def forward(self, dec_input, enc_info):
         X, key_value, dec_valid = dec_input
-        # if self.training:
-        #     dec_valid = torch.arange(1, X.shape[1] + 1, device=X.device).expand(
-        #         X.shape[0], X.shape[1]
-        #     )
-        # else:
-        #     dec_valid = None
-        # if enc_valid.dim() == 1:
-        #     enc_valid = enc_valid.expand(enc_output.shape[0], enc_output.shape[1])
         X = self.pos_encoding(self.embedding(X) * math.sqrt(self.dm))
         dec_input = (X, key_value, dec_valid)
         for i, blk in enumerate(self.blks):
@@ -301,7 +300,7 @@ class TransformerDecoder(nn.Module):
             self.weights[0][i] = blk.attention1.attention.weights
             self.weights[1][i] = blk.attention2.attention.weights
         Y = self.linear(dec_input[0])
-        return (Y, key_value, dec_valid)
+        return Y, key_value
 
 
 class PositionalEncoding(nn.Module):
@@ -447,7 +446,7 @@ class DotProductAttention(nn.Module):
         scores = torch.bmm(q, k.permute(0, 2, 1)) / math.sqrt(k.shape[-1])
         # 计算掩码并进行掩码操作,valid:(bz,sz)
         if valid is not None:
-            mask = torch.arange(1, q.shape[1] + 1).expand(
+            mask = torch.arange(1, q.shape[1] + 1, device=q.device).expand(
                 (q.shape[0], q.shape[1], q.shape[1])
             ) > valid.unsqueeze(2)
             mask_scores = torch.masked_fill(scores, mask, 1e-6)
