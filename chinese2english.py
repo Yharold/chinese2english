@@ -1,4 +1,3 @@
-import collections
 import math
 import random
 import torch
@@ -206,56 +205,11 @@ class Chinese2English:
                     f"{(epoch+1)/num_epochs*100:.1f}%,"
                     f"predict to need for {all_time*(num_epochs/(epoch+1)-1):.1f}",
                 )
-        torch.save(model.state_dict(), "datasets/model/model_all.pt")
-        torch.save(each_scores, "datasets/scroes.pt")
+            torch.save(model.state_dict(), "datasets/model/model_all.pt")
+            torch.save(each_scores, "datasets/scroes.pt")
 
-    def predict(model: nn.Module, dataloader: DataLoader, device):
-        model.eval()
-        # 计算每一个数据集的bleu得分,计算总的bleu
-        pred_seqs = []
-        for iter in dataloader:
-            X, X_valid, _, Y, _, _ = [x.to(device) for x in iter]
-            # 计算编码器输出
-            enc_output = model.encoder(X, X_valid)
-            # 解码器输入,[BOS]是1，[EOS]是2
-            bos = torch.tensor([1], device=device).unsqueeze(dim=0)
-            key_value = [None] * model.decoder.num_layer
-            dec_input = (bos, key_value, None)
-            enc_info = (enc_output, X_valid)
-            # 循环计算解码器输出
-            pred_seq = []
-            for _ in range(128):
-                # Y_hat:(1,1,3000)
-                Y_hat, key_value = model.decoder(dec_input, enc_info)
-                pred = Y_hat.argmax(dim=2)  # pred:(1,1)
-                if pred.item() == 2:
-                    break
-                pred_seq.append(pred.item())
-                dec_input = (pred, key_value, None)
-            # 计算bleu得分
-            feature = [x for x in X if x != 1 and x != 2 and x != 3]
-            label = [x for x in Y if x != 1 and x != 2 and x != 3]
-            pred_seqs.append((feature, label, pred_seq, bleu(pred_seq, label, 2)))
-        score_avarage = sum([x[3] for x in pred_seqs]) / len(pred_seqs)
-        print("predict score avarage:", score_avarage)
-        return pred_seqs
-
-
-def bleu(pred_seq, label_seq, k):
-    pred_tokens = [str(x) for x in pred_seq]
-    label_tokens = [str(x) for x in label_seq]
-    len_pred, len_label = len(pred_tokens), len(label_tokens)
-    score = math.exp(min(0, 1 - len_label / len_pred))
-    for n in range(1, min(k, len_pred) + 1):
-        num_matches, label_subs = 0, collections.defaultdict(int)
-        for i in range(len_label - n + 1):
-            label_subs[" ".join(label_tokens[i : i + n])] += 1
-        for i in range(len_pred - n + 1):
-            if label_subs[" ".join(pred_tokens[i : i + n])] > 0:
-                num_matches += 1
-                label_subs[" ".join(pred_tokens[i : i + n])] -= 1
-        score *= math.pow(num_matches / (len_pred - n + 1), math.pow(0.5, n))
-    return score
+    def predict(model: nn.Module, dataloader: DataLoader):
+        pass
 
 
 class CustomLoss(nn.CrossEntropyLoss):

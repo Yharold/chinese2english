@@ -206,8 +206,8 @@ def test_predict():
     encoder = TransformerEncoder(vz1, dm, num_hidden, num_heads, dropout, num_layer)
     decoder = TransformerDecoder(vz2, dm, num_hidden, num_heads, dropout, num_layer)
     model = Transformer(encoder, decoder)
+    model.load_state_dict(torch.load("datasets/model/model_all.pt"))
     c2e = Chinese2English()
-    c2e.load_state_dict(torch.load("datasets/model/model_all.pt"))
     pred_seqs = c2e.predict(model, dataloader, epochs, lr, device)
     feature_tokenizer = Tokenizer.from_file("datasets/feature_tokenizer")
     label_tokenizer = Tokenizer.from_file("datasets/label_tokenizer")
@@ -217,6 +217,9 @@ def test_predict():
             "translate:",
             feature_tokenizer.decode(feature),
             "=====>",
-            label.decode(pred_seq),
+            label_tokenizer.decode(pred_seq),
         )
         print("right result:", label.decode(label), " scores:", score)
+
+
+test_predict()
