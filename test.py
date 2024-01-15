@@ -177,3 +177,46 @@ def test_run():
     model = Transformer(encoder, decoder)
     c2e = Chinese2English()
     c2e.train(model, dataloader, epochs, lr, device)
+
+
+def test_bleu():
+    x = [3, 5, 7, 2, 9, 2]
+    y = [3, 5, 7, 1, 9, 2]
+    score = bleu(x, y, 2)
+    print(score)
+
+
+def test_predict():
+    epochs = 1
+    bz = 1
+    lr = 0.001
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    train_path = "datasets/test_XY.pt"
+    X, X_valid, X_mask, Y, Y_valid, Y_mask = torch.load(train_path)
+    dataset = CustomDataset(X, X_valid, X_mask, Y, Y_valid, Y_mask)
+    dataloader = DataLoader(dataset, bz, shuffle=False)
+    vz1 = 10000
+    vz2 = 3000
+    sz = 128
+    dm = 128
+    num_heads = 8
+    num_hidden = 512
+    num_layer = 1
+    dropout = 0.001
+    encoder = TransformerEncoder(vz1, dm, num_hidden, num_heads, dropout, num_layer)
+    decoder = TransformerDecoder(vz2, dm, num_hidden, num_heads, dropout, num_layer)
+    model = Transformer(encoder, decoder)
+    c2e = Chinese2English()
+    c2e.load_state_dict(torch.load("datasets/model/model_all.pt"))
+    pred_seqs = c2e.predict(model, dataloader, epochs, lr, device)
+    feature_tokenizer = Tokenizer.from_file("datasets/feature_tokenizer")
+    label_tokenizer = Tokenizer.from_file("datasets/label_tokenizer")
+    for item in pred_seqs:
+        feature, label, pred_seq, score = item
+        print(
+            "translate:",
+            feature_tokenizer.decode(feature),
+            "=====>",
+            label.decode(pred_seq),
+        )
+        print("right result:", label.decode(label), " scores:", score)
