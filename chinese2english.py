@@ -205,8 +205,8 @@ class Chinese2English:
                     f"{(epoch+1)/num_epochs*100:.1f}%,"
                     f"predict to need for {all_time*(num_epochs/(epoch+1)-1):.1f}",
                 )
-            torch.save(model.state_dict(), "datasets/model/model_all.pt")
-            torch.save(each_scores, "datasets/scroes.pt")
+        torch.save(model.state_dict(), "datasets/model/model_all.pt")
+        torch.save(each_scores, "datasets/scroes.pt")
 
     def predict(model: nn.Module, dataloader: DataLoader):
         pass

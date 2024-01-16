@@ -4,3 +4,4 @@ datasets/XY.pt
 datasets/feature_tokenizer
 datasets/label_tokenizer
 datasets/model/
+datasets/
