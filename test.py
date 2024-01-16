@@ -1,6 +1,7 @@
 from chinese2english import *
 import numpy as np
-from d2l import torch as d2l
+
+# from d2l import torch as d2l
 
 
 def test_DotProductAttention():
@@ -223,3 +224,10 @@ def test_predict():
 
 
 test_predict()
+
+# scroes = torch.load("datasets/scroes.pt")
+# x = torch.range(1, len(scroes))
+# # print(scroes)
+# fig, ax = plt.subplots()
+# ax.plot(x[10:], scroes[10:])
+# plt.show()
